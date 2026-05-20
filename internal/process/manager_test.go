@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/user/sessionnode/go-core/internal/testutil"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -58,7 +59,8 @@ func TestSpawn_StartsProcess(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("echo", []string{"hello"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	sid, err := m.Spawn(echoBin, []string{"hello"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -91,7 +93,8 @@ func TestSpawn_OutputDelivery(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	_, err := m.Spawn("echo", []string{"hello world"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	_, err := m.Spawn(echoBin, []string{"hello world"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -116,9 +119,10 @@ func TestWriteStdin(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null; echo done"}, "", nil)
+	catBin := testutil.CatBinary(t)
+	sid, err := m.Spawn(catBin, nil, "", nil)
 	if err != nil {
-		t.Skipf("sh not available: %v", err)
+		t.Skipf("cat not available: %v", err)
 	}
 
 	if err := m.WriteStdin(sid, "test input\n"); err != nil {
@@ -136,7 +140,8 @@ func TestSignal_Kill(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sleep", []string{"60"}, "", nil)
+	sleepBin := testutil.SleepBinary(t)
+	sid, err := m.Spawn(sleepBin, []string{"60"}, "", nil)
 	if err != nil {
 		t.Skipf("sleep not available: %v", err)
 	}
@@ -165,8 +170,9 @@ func TestList_Count(t *testing.T) {
 		t.Errorf("expected 0 processes initially, got %d", m.Count())
 	}
 
-	m.Spawn("echo", []string{"a"}, "", nil)
-	m.Spawn("echo", []string{"b"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	m.Spawn(echoBin, []string{"a"}, "", nil)
+	m.Spawn(echoBin, []string{"b"}, "", nil)
 
 	if m.Count() != 2 {
 		t.Errorf("expected 2 processes, got %d", m.Count())
@@ -181,8 +187,9 @@ func TestCleanup_KillsAll(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
 
-	m.Spawn("sleep", []string{"60"}, "", nil)
-	m.Spawn("sleep", []string{"60"}, "", nil)
+	sleepBin := testutil.SleepBinary(t)
+	m.Spawn(sleepBin, []string{"60"}, "", nil)
+	m.Spawn(sleepBin, []string{"60"}, "", nil)
 
 	if m.Count() != 2 {
 		t.Fatalf("expected 2 processes before cleanup, got %d", m.Count())
@@ -200,9 +207,10 @@ func TestCloseStdin(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null"}, "", nil)
+	catBin := testutil.CatBinary(t)
+	sid, err := m.Spawn(catBin, nil, "", nil)
 	if err != nil {
-		t.Skipf("sh not available: %v", err)
+		t.Skipf("cat not available: %v", err)
 	}
 
 	if err := m.CloseStdin(sid); err != nil {
@@ -256,10 +264,10 @@ func TestReadStream_RawBytes(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	_, err := m.Spawn("printf", []string{"partial_line"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	_, err := m.Spawn(echoBin, []string{"partial_line"}, "", nil)
 	if err != nil {
-		// Fallback: echo -n might work in some shells.
-		t.Skipf("printf not available: %v", err)
+		t.Skipf("echo not available: %v", err)
 	}
 
 	time.Sleep(1 * time.Second)
@@ -281,7 +289,8 @@ func TestSpawnPTY_OnWindows(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
 
-	_, err := m.SpawnPTY("echo", []string{"test"}, "", 80, 40, nil)
+	echoBin := testutil.EchoBinary(t)
+	_, err := m.SpawnPTY(echoBin, []string{"test"}, "", 80, 40, nil)
 	if err == nil {
 		t.Skip("PTY is supported on this platform")
 	}
@@ -292,7 +301,8 @@ func TestResize_NoPTY(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("echo", []string{"test"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	sid, err := m.Spawn(echoBin, []string{"test"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -308,9 +318,10 @@ func TestSpawn_MultipleOutputLines(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "echo line1; echo line2; echo line3"}, "", nil)
+	echoBin := testutil.EchoBinary(t)
+	sid, err := m.Spawn(echoBin, []string{"line1", "line2", "line3"}, "", nil)
 	if err != nil {
-		t.Skipf("sh not available: %v", err)
+		t.Skipf("echo not available: %v", err)
 	}
 
 	time.Sleep(1 * time.Second)

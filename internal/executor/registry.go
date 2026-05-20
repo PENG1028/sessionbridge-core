@@ -3,9 +3,11 @@ package executor
 import (
 	"fmt"
 
+	"github.com/user/sessionnode/go-core/internal/capability"
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -70,6 +72,14 @@ func New(deps *Deps) *Registry {
 
 // Execute dispatches a capability request to the registered handler.
 func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
+	plat := platform.Current()
+	if capability.Support(req.Capability, plat) == capability.Unsupported {
+		return nil, &types.CoreError{
+			Code:    "CAPABILITY_UNSUPPORTED_ON_PLATFORM",
+			Message: fmt.Sprintf("capability %q is not supported on %s", req.Capability, plat),
+		}
+	}
+
 	handler, ok := r.handlers[req.Capability]
 	if !ok {
 		return nil, fmt.Errorf("unknown capability: %q", req.Capability)

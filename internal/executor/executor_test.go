@@ -16,6 +16,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
+	"github.com/user/sessionnode/go-core/internal/testutil"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
@@ -633,8 +634,10 @@ func TestLifecycle_SessionCreateToDestroy(t *testing.T) {
 }
 
 func TestStreamWriteToStdinWithProcess(t *testing.T) {
-	r := New(testDeps(t))
-	m := execOK(t, r, "process.spawn", map[string]interface{}{"command": "cat"})
+	deps := testDeps(t)
+	r := New(deps)
+	catBin := testutil.CatBinary(t)
+	m := execOK(t, r, "process.spawn", map[string]interface{}{"command": catBin})
 	sid := m["sessionId"].(string)
 	time.Sleep(100 * time.Millisecond)
 
@@ -646,11 +649,16 @@ func TestStreamWriteToStdinWithProcess(t *testing.T) {
 	if wm["written"].(float64) == 0 {
 		t.Error("expected >0 bytes written")
 	}
+
+	// Close stdin so the process can exit (prevents TempDir cleanup failure on Windows)
+	deps.Processes.CloseStdin(types.SessionID(sid))
 }
 
 func TestStreamWriteWithStreamType(t *testing.T) {
-	r := New(testDeps(t))
-	m := execOK(t, r, "process.spawn", map[string]interface{}{"command": "cat"})
+	deps := testDeps(t)
+	r := New(deps)
+	catBin := testutil.CatBinary(t)
+	m := execOK(t, r, "process.spawn", map[string]interface{}{"command": catBin})
 	sid := m["sessionId"].(string)
 	time.Sleep(100 * time.Millisecond)
 
@@ -666,6 +674,9 @@ func TestStreamWriteWithStreamType(t *testing.T) {
 	if wm["streamType"].(string) != "stdin" {
 		t.Errorf("streamType = %v, want 'stdin'", wm["streamType"])
 	}
+
+	// Close stdin so the process can exit (prevents TempDir cleanup failure on Windows)
+	deps.Processes.CloseStdin(types.SessionID(sid))
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +686,8 @@ func TestStreamWriteWithStreamType(t *testing.T) {
 func TestProcessWriteStdin(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	sid, err := pm.Spawn("cat", nil, "", nil)
+	catBin := testutil.CatBinary(t)
+	sid, err := pm.Spawn(catBin, nil, "", nil)
 	if err != nil {
 		t.Fatalf("spawn cat failed: %v", err)
 	}
@@ -692,7 +704,8 @@ func TestProcessWriteStdin(t *testing.T) {
 func TestProcessSignal_Kill(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	sid, err := pm.Spawn("sleep", []string{"30"}, "", nil)
+	sleepBin := testutil.SleepBinary(t)
+	sid, err := pm.Spawn(sleepBin, []string{"30"}, "", nil)
 	if err != nil {
 		t.Fatalf("spawn sleep failed: %v", err)
 	}
@@ -735,8 +748,9 @@ func TestProcessList_Empty(t *testing.T) {
 func TestProcessCleanup(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	pm.Spawn("sleep", []string{"30"}, "", nil)
-	pm.Spawn("sleep", []string{"30"}, "", nil)
+	sleepBin := testutil.SleepBinary(t)
+	pm.Spawn(sleepBin, []string{"30"}, "", nil)
+	pm.Spawn(sleepBin, []string{"30"}, "", nil)
 	if pm.Count() != 2 {
 		t.Fatalf("expected 2 processes, got %d", pm.Count())
 	}

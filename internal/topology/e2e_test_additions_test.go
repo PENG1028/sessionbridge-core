@@ -17,6 +17,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/server"
 	"github.com/user/sessionnode/go-core/internal/session"
+	"github.com/user/sessionnode/go-core/internal/testutil"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -146,7 +147,14 @@ func TestTwoCore_RealProcessHistoryCapture(t *testing.T) {
 	}
 
 	// Step 2: Spawn a real process on local
-	spawnPayload := json.RawMessage(`{"command":"echo","args":["hello-from-process-stdout"],"cwd":"/tmp"}`)
+	echoBin := testutil.EchoBinary(t)
+	spawnPayloadMap := map[string]interface{}{
+		"command": echoBin,
+		"args":    []string{"hello-from-process-stdout"},
+		"cwd":     "/tmp",
+	}
+	spawnPayloadBytes, _ := json.Marshal(spawnPayloadMap)
+	spawnPayload := json.RawMessage(spawnPayloadBytes)
 	spawnResp := dLocal.Dispatch(&types.CapabilityRequest{
 		RequestID: "req_spawn", PluginID: "sessionnode-core",
 		Capability: "process.spawn", Payload: spawnPayload,
