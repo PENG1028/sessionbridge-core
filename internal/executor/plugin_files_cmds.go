@@ -1,6 +1,9 @@
 package executor
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -39,5 +42,53 @@ func pluginFilesList(req *types.CapabilityRequest, deps *Deps) (interface{}, err
 	return map[string]interface{}{
 		"pluginId": pluginID,
 		"files":    files,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// plugin.files.register
+// ---------------------------------------------------------------------------
+
+// pluginFilesRegister registers file paths for a plugin in the PlanStore.
+// These registered files are used during uninstall to report what would be
+// removed, and by other lifecycle operations to track plugin artifacts.
+func pluginFilesRegister(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var payload struct {
+		PluginID string   `json:"pluginId"`
+		Files    []string `json:"files"`
+	}
+	if req.Payload != nil {
+		if err := json.Unmarshal(req.Payload, &payload); err != nil {
+			return nil, fmt.Errorf("invalid payload: %w", err)
+		}
+	}
+
+	pluginID := payload.PluginID
+	if pluginID == "" {
+		// Fall back to caller's plugin ID from the request envelope.
+		if req.PluginID != "" {
+			pluginID = req.PluginID.String()
+		}
+	}
+	if pluginID == "" {
+		return nil, fmt.Errorf("pluginId is required")
+	}
+
+	if deps.Store == nil {
+		return nil, fmt.Errorf("plan store not initialized")
+	}
+
+	// Store the files, appending to any already registered for this plugin.
+	deps.Store.mu.Lock()
+	deps.Store.PluginFiles[pluginID] = append(deps.Store.PluginFiles[pluginID], payload.Files...)
+	registered := make([]string, len(deps.Store.PluginFiles[pluginID]))
+	copy(registered, deps.Store.PluginFiles[pluginID])
+	deps.Store.mu.Unlock()
+
+	return map[string]interface{}{
+		"status":   "registered",
+		"pluginId": pluginID,
+		"files":    registered,
+		"count":    len(registered),
 	}, nil
 }

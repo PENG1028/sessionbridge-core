@@ -45,6 +45,7 @@ type ApprovalRequest struct {
 	Actions   []ApprovalAction  `json:"actions"`
 	Timeout   int               `json:"timeout"` // seconds
 	CreatedAt int64             `json:"createdAt"`
+	PlanID    string            `json:"planId,omitempty"` // linked plan for approval workflow
 	Responded bool              `json:"-"`
 	Response  *ApprovalResponse `json:"-"`
 	ExpiresAt time.Time         `json:"-"`
@@ -222,6 +223,13 @@ func (m *Manager) Respond(requestID types.RequestID, action, respondedBy string)
 	m.push(resultMsg)
 
 	return apr.Response, nil
+}
+
+// GetApproval returns the approval request for the given ID, or nil if not found.
+func (m *Manager) GetApproval(requestID types.RequestID) *ApprovalRequest {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.approvals[requestID]
 }
 
 // WaitForResponse blocks until the approval is responded to or times out.

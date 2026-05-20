@@ -46,6 +46,7 @@ type notifyRequestPayload struct {
 	Detail  string                  `json:"detail,omitempty"`
 	Actions []notify.ApprovalAction `json:"actions"`
 	Timeout int                     `json:"timeout"`
+	PlanID  string                  `json:"planId,omitempty"` // linked approval plan
 }
 
 // notifyRequest implements the "notify.request" capability.
@@ -62,6 +63,10 @@ func notifyRequest(req *types.CapabilityRequest, deps *Deps) (interface{}, error
 	)
 	if err != nil {
 		return nil, err
+	}
+	// Link to an approval plan if provided
+	if p.PlanID != "" {
+		apr.PlanID = p.PlanID
 	}
 	return map[string]interface{}{
 		"requestId": string(apr.RequestID),
@@ -88,6 +93,24 @@ func notifyRespond(req *types.CapabilityRequest, deps *Deps) (interface{}, error
 	if err != nil {
 		return nil, err
 	}
+
+	// If the approval is linked to a plan, update the plan state.
+	if deps.PlanManager != nil {
+		apr := deps.Notifier.GetApproval(types.RequestID(p.RequestID))
+		if apr != nil && apr.PlanID != "" {
+			switch p.Action {
+			case "allow":
+				if err := deps.PlanManager.ApprovePlan(apr.PlanID, "user"); err != nil {
+					return nil, fmt.Errorf("approve plan %s: %w", apr.PlanID, err)
+				}
+			case "deny":
+				if err := deps.PlanManager.DenyPlan(apr.PlanID, "user", "denied via notify.respond"); err != nil {
+					return nil, fmt.Errorf("deny plan %s: %w", apr.PlanID, err)
+				}
+			}
+		}
+	}
+
 	return map[string]interface{}{
 		"requestId":  string(resp.RequestID),
 		"action":     resp.Action,

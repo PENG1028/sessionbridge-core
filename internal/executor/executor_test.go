@@ -14,10 +14,12 @@ import (
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
+	"github.com/user/sessionnode/go-core/internal/task"
 	"github.com/user/sessionnode/go-core/internal/testutil"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
@@ -73,6 +75,7 @@ func testDeps(t *testing.T) *Deps {
 		Processes:  pm,
 		ConnRoutes: cr,
 		Nodes:      &mockNodeLister{},
+		TaskStore:  task.NewStore(),
 	}
 }
 
@@ -1377,11 +1380,11 @@ func TestPluginCacheList_ReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestPluginInstallPlan_ReturnsNotImplemented(t *testing.T) {
+func TestPluginInstallPlan_ReturnsPendingApproval(t *testing.T) {
 	r := New(testDeps(t))
 	m := execOK(t, r, "plugin.install", map[string]string{"pluginId": "sessionnode-core"})
-	if m["status"] != "not_implemented" {
-		t.Errorf("status = %v, want not_implemented", m["status"])
+	if m["status"] != "pending_approval" {
+		t.Errorf("status = %v, want pending_approval", m["status"])
 	}
 }
 
@@ -1421,7 +1424,7 @@ func (m *mockManifestLoader) PluginEnabled(pluginID string) bool {
 	return m.manifest != nil && m.manifest.ID == pluginID
 }
 
-// fullPluginDeps returns deps with Config, Notifier, and History initialized.
+// fullPluginDeps returns deps with Config, Notifier, History, and Store initialized.
 func fullPluginDeps(t *testing.T) *Deps {
 	t.Helper()
 	deps := testDeps(t)
@@ -1432,6 +1435,7 @@ func fullPluginDeps(t *testing.T) *Deps {
 	deps.Config = cm
 	deps.History = history.New("")
 	deps.Notifier = notify.NewManager(func(msg *protocol.Message) {})
+	deps.Store = NewPlanStore()
 	return deps
 }
 
@@ -1748,21 +1752,31 @@ func TestPluginCacheClearExecute_NoPlanId(t *testing.T) {
 	}
 }
 
-// TestNotImplementedStub verifies that stub capabilities return not_implemented.
-func TestNotImplementedStub(t *testing.T) {
-	r := New(testDeps(t))
+// TestFormerStubsNowImplemented verifies that previously-stubbed capabilities
+// now have real handlers.
+func TestFormerStubsNowImplemented(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
 
-	// Test each stub via direct registry call
-	stubs := []string{
-		"plugin.install.execute",
-		"plugin.uninstall",
-		"plugin.files.register",
+	// plugin.install.execute — requires a planId
+	_, err := r.Execute(req("plugin.install.execute", map[string]string{"pluginId": "test"}))
+	if err == nil {
+		t.Fatal("expected error for plugin.install.execute without planId")
 	}
-	for _, capName := range stubs {
-		m := execOK(t, r, capName, map[string]string{"pluginId": "test"})
-		if m["status"] != "not_implemented" {
-			t.Errorf("%s: status = %v, want not_implemented", capName, m["status"])
-		}
+
+	// plugin.uninstall — works with dry-run
+	m := execOK(t, r, "plugin.uninstall", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "uninstalled" {
+		t.Errorf("plugin.uninstall status = %v, want uninstalled", m["status"])
+	}
+
+	// plugin.files.register — works
+	m2 := execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"pluginId": "test-plugin",
+		"files":    []string{"/tmp/test-files-register"},
+	})
+	if m2["status"] != "registered" {
+		t.Errorf("plugin.files.register status = %v, want registered", m2["status"])
 	}
 }
 
@@ -1854,5 +1868,825 @@ func TestPluginCacheInfo(t *testing.T) {
 	}
 	if len(caches) != 0 {
 		t.Errorf("expected empty caches, got %d", len(caches))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// task.*
+// ---------------------------------------------------------------------------
+
+func TestTaskCreate(t *testing.T) {
+	deps := testDeps(t)
+
+	now := time.Now().UnixMilli()
+	tk := &task.Task{
+		ID:       "task-1",
+		Type:     task.TypeInstall,
+		PluginID: "test-plugin",
+		Status:   task.StatusPending,
+		Steps: []task.Step{
+			{Name: "download", Status: task.StatusPending},
+			{Name: "extract", Status: task.StatusPending},
+		},
+		StartedAt: now,
+	}
+	deps.TaskStore.Create(tk)
+
+	got, ok := deps.TaskStore.Get("task-1")
+	if !ok {
+		t.Fatal("expected task to exist after Create")
+	}
+	if got.ID != "task-1" {
+		t.Errorf("ID = %v, want task-1", got.ID)
+	}
+	if got.Type != task.TypeInstall {
+		t.Errorf("Type = %v, want install", got.Type)
+	}
+	if got.PluginID != "test-plugin" {
+		t.Errorf("PluginID = %v, want test-plugin", got.PluginID)
+	}
+	if got.Status != task.StatusPending {
+		t.Errorf("Status = %v, want pending", got.Status)
+	}
+	if len(got.Steps) != 2 {
+		t.Errorf("len(Steps) = %d, want 2", len(got.Steps))
+	}
+	if got.StartedAt == 0 {
+		t.Error("StartedAt should not be zero")
+	}
+}
+
+func TestTaskList(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	deps.TaskStore.Create(&task.Task{
+		ID: "task-1", Type: task.TypeInstall, PluginID: "plugin-a",
+		Status: task.StatusPending, StartedAt: time.Now().UnixMilli(),
+	})
+	deps.TaskStore.Create(&task.Task{
+		ID: "task-2", Type: task.TypeCheck, PluginID: "plugin-b",
+		Status: task.StatusRunning, StartedAt: time.Now().UnixMilli(),
+	})
+
+	m := execOK(t, r, "task.list", nil)
+	tasks, ok := m["tasks"].([]interface{})
+	if !ok {
+		t.Fatalf("tasks is not an array: %T", m["tasks"])
+	}
+	if len(tasks) != 2 {
+		t.Errorf("expected 2 tasks, got %d", len(tasks))
+	}
+}
+
+func TestTaskInfo(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	deps.TaskStore.Create(&task.Task{
+		ID: "task-1", Type: task.TypeInstall, PluginID: "plugin-a",
+		Status: task.StatusRunning, StartedAt: time.Now().UnixMilli(),
+		TargetNodeID: "node-local",
+	})
+
+	m := execOK(t, r, "task.info", map[string]string{"taskId": "task-1"})
+	if m["taskId"] != "task-1" {
+		t.Errorf("taskId = %v, want task-1", m["taskId"])
+	}
+	if m["type"] != "install" {
+		t.Errorf("type = %v, want install", m["type"])
+	}
+	if m["status"] != "running" {
+		t.Errorf("status = %v, want running", m["status"])
+	}
+	if m["targetNodeId"] != "node-local" {
+		t.Errorf("targetNodeId = %v, want node-local", m["targetNodeId"])
+	}
+}
+
+func TestTaskInfo_MissingTaskId(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("task.info", map[string]string{}))
+	if err == nil {
+		t.Fatal("expected error for missing taskId")
+	}
+}
+
+func TestTaskInfo_NotFound(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("task.info", map[string]string{"taskId": "nonexistent"}))
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+}
+
+func TestTaskProgress(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	deps.TaskStore.Create(&task.Task{
+		ID: "task-1", Type: task.TypeInstall, PluginID: "plugin-a",
+		Status: task.StatusPending, StartedAt: time.Now().UnixMilli(),
+		Steps: []task.Step{
+			{Name: "download", Status: task.StatusPending},
+			{Name: "verify", Status: task.StatusPending},
+		},
+	})
+
+	// Update to running
+	deps.TaskStore.UpdateStatus("task-1", task.StatusRunning, "")
+	deps.TaskStore.AddEvent("task-1", 0, "download started", "info")
+
+	got, ok := deps.TaskStore.Get("task-1")
+	if !ok {
+		t.Fatal("task not found")
+	}
+	if got.Status != task.StatusRunning {
+		t.Errorf("Status = %v, want running", got.Status)
+	}
+	if len(got.Events) != 1 {
+		t.Errorf("len(Events) = %d, want 1", len(got.Events))
+	}
+	if got.Events[0].Message != "download started" {
+		t.Errorf("event message = %v, want 'download started'", got.Events[0].Message)
+	}
+
+	// Mark as succeeded
+	deps.TaskStore.UpdateStatus("task-1", task.StatusSucceeded, "")
+	got, ok = deps.TaskStore.Get("task-1")
+	if !ok {
+		t.Fatal("task not found after update")
+	}
+	if got.Status != task.StatusSucceeded {
+		t.Errorf("Status = %v, want succeeded", got.Status)
+	}
+	if got.FinishedAt == 0 {
+		t.Error("FinishedAt should be set after terminal status")
+	}
+
+	// Verify via capability
+	m := execOK(t, r, "task.info", map[string]string{"taskId": "task-1"})
+	if m["status"] != "succeeded" {
+		t.Errorf("status = %v, want succeeded", m["status"])
+	}
+}
+
+func TestTaskFailed(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	deps.TaskStore.Create(&task.Task{
+		ID: "task-1", Type: task.TypeCheck, PluginID: "plugin-a",
+		Status: task.StatusRunning, StartedAt: time.Now().UnixMilli(),
+	})
+
+	deps.TaskStore.UpdateStatus("task-1", task.StatusFailed, "dependency not found: git")
+
+	got, ok := deps.TaskStore.Get("task-1")
+	if !ok {
+		t.Fatal("task not found")
+	}
+	if got.Status != task.StatusFailed {
+		t.Errorf("Status = %v, want failed", got.Status)
+	}
+	if got.Error != "dependency not found: git" {
+		t.Errorf("Error = %v, want 'dependency not found: git'", got.Error)
+	}
+	if got.FinishedAt == 0 {
+		t.Error("FinishedAt should be set after terminal status")
+	}
+
+	// Verify via capability
+	m := execOK(t, r, "task.info", map[string]string{"taskId": "task-1"})
+	if m["status"] != "failed" {
+		t.Errorf("status = %v, want failed", m["status"])
+	}
+	if m["error"] != "dependency not found: git" {
+		t.Errorf("error = %v, want 'dependency not found: git'", m["error"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// plugin.install.* lifecycle tests
+// ---------------------------------------------------------------------------
+
+func TestInstallPlan_UnknownPlugin_ReturnsErrorSafe(t *testing.T) {
+	// plugin.install plan should succeed even for unknown plugins (uses manifests).
+	// Unknown plugins get a generic plan — no error is returned.
+	r := New(fullPluginDeps(t))
+	m := execOK(t, r, "plugin.install", map[string]string{"pluginId": "unknown-plugin-xyz"})
+	if m["status"] != "pending_approval" {
+		t.Errorf("status = %v, want pending_approval", m["status"])
+	}
+	if m["pluginId"] != "unknown-plugin-xyz" {
+		t.Errorf("pluginId = %v, want unknown-plugin-xyz", m["pluginId"])
+	}
+}
+
+func TestInstallExecute_WithoutApproval_Fails(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Step 1: create a plan (status = pending_approval)
+	plan := execOK(t, r, "plugin.install", map[string]string{"pluginId": "test-plugin"})
+	planID := plan["planId"].(string)
+
+	// Step 2: try to execute without approving first
+	execResult := execOK(t, r, "plugin.install.execute", map[string]string{
+		"planId":   planID,
+		"pluginId": "test-plugin",
+	})
+	if execResult["status"] != "plan_not_approved" {
+		t.Errorf("status = %v, want plan_not_approved", execResult["status"])
+	}
+}
+
+func TestInstallExecute_WithApprovedPlan_Succeeds(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Step 1: create a plan
+	plan := execOK(t, r, "plugin.install", map[string]string{"pluginId": "test-plugin"})
+	planID := plan["planId"].(string)
+
+	// Step 2: manually approve the plan by setting its status in the store
+	deps.Store.mu.Lock()
+	deps.Store.InstallPlans[planID].Status = "approved"
+	deps.Store.InstallPlans[planID].ApprovedAt = time.Now().UnixMilli()
+	deps.Store.mu.Unlock()
+
+	// Step 3: execute the approved plan
+	execResult := execOK(t, r, "plugin.install.execute", map[string]string{
+		"planId":   planID,
+		"pluginId": "test-plugin",
+	})
+	if execResult["status"] != "completed" {
+		t.Errorf("status = %v, want completed", execResult["status"])
+	}
+	if execResult["dryRun"] != true {
+		t.Errorf("dryRun = %v, want true", execResult["dryRun"])
+	}
+
+	// Verify the plan was updated to completed in the store
+	deps.Store.mu.RLock()
+	storedPlan := deps.Store.InstallPlans[planID]
+	deps.Store.mu.RUnlock()
+	if storedPlan == nil {
+		t.Fatal("plan not found in store after execution")
+	}
+	if storedPlan.Status != "completed" {
+		t.Errorf("stored plan status = %v, want completed", storedPlan.Status)
+	}
+
+	// All steps should be "completed"
+	for _, step := range storedPlan.Steps {
+		if step.Status != "completed" {
+			t.Errorf("step %d status = %v, want completed", step.Order, step.Status)
+		}
+	}
+}
+
+func TestInstallExecute_DryRunOnly_NoRealCommands(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Create and approve a plan
+	plan := execOK(t, r, "plugin.install", map[string]string{"pluginId": "test-plugin"})
+	planID := plan["planId"].(string)
+
+	deps.Store.mu.Lock()
+	deps.Store.InstallPlans[planID].Status = "approved"
+	deps.Store.InstallPlans[planID].ApprovedAt = time.Now().UnixMilli()
+	deps.Store.mu.Unlock()
+
+	// Count processes before execution
+	beforeCount := deps.Processes.Count()
+
+	// Execute
+	execOK(t, r, "plugin.install.execute", map[string]string{
+		"planId":   planID,
+		"pluginId": "test-plugin",
+	})
+
+	// Verify no real processes were spawned (dry-run only)
+	afterCount := deps.Processes.Count()
+	if afterCount != beforeCount {
+		t.Errorf("process count changed from %d to %d; dry-run should not spawn processes", beforeCount, afterCount)
+	}
+}
+
+func TestInstallExecute_MissingPlanId_ReturnsError(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("plugin.install.execute", map[string]string{
+		"pluginId": "test-plugin",
+	}))
+	if err == nil {
+		t.Fatal("expected error for missing planId")
+	}
+}
+
+func TestInstallExecute_PlanNotFound_ReturnsError(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("plugin.install.execute", map[string]string{
+		"planId":   "nonexistent-plan",
+		"pluginId": "test-plugin",
+	}))
+	if err == nil {
+		t.Fatal("expected error for nonexistent plan")
+	}
+}
+
+func TestUninstall_ReturnsResult(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// First register some files so uninstall has something to report
+	execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"pluginId": "test-plugin",
+		"files":    []string{"/tmp/test-plugin/config", "/tmp/test-plugin/data"},
+	})
+
+	m := execOK(t, r, "plugin.uninstall", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "uninstalled" {
+		t.Errorf("status = %v, want uninstalled", m["status"])
+	}
+	if m["dryRun"] != true {
+		t.Errorf("dryRun = %v, want true", m["dryRun"])
+	}
+	files, ok := m["registeredFiles"].([]interface{})
+	if !ok {
+		t.Fatalf("registeredFiles is not an array: %T", m["registeredFiles"])
+	}
+	if len(files) != 2 {
+		t.Errorf("expected 2 registered files, got %d", len(files))
+	}
+	removed, ok := m["removedCount"].(float64)
+	if !ok || int(removed) != 2 {
+		t.Errorf("removedCount = %v, want 2", m["removedCount"])
+	}
+}
+
+func TestUninstall_RecordsHistory(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	execOK(t, r, "plugin.uninstall", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify history was recorded
+	events := deps.History.QueryPluginEvents("test-plugin")
+	found := false
+	for _, e := range events {
+		if e.EventType == "plugin.uninstalled" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected a plugin.uninstalled history event")
+	}
+}
+
+func TestFilesRegister_RegistersFiles(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"pluginId": "test-plugin",
+		"files":    []string{"/tmp/test-plugin/config.yaml", "/tmp/test-plugin/cache"},
+	})
+	if m["status"] != "registered" {
+		t.Errorf("status = %v, want registered", m["status"])
+	}
+	if m["pluginId"] != "test-plugin" {
+		t.Errorf("pluginId = %v, want test-plugin", m["pluginId"])
+	}
+	files, ok := m["files"].([]interface{})
+	if !ok {
+		t.Fatalf("files is not an array: %T", m["files"])
+	}
+	if len(files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(files))
+	}
+	count, ok := m["count"].(float64)
+	if !ok || int(count) != 2 {
+		t.Errorf("count = %v, want 2", m["count"])
+	}
+
+	// Verify stored in PlanStore
+	deps.Store.mu.RLock()
+	registered := deps.Store.PluginFiles["test-plugin"]
+	deps.Store.mu.RUnlock()
+	if len(registered) != 2 {
+		t.Errorf("stored files count = %d, want 2", len(registered))
+	}
+}
+
+func TestFilesRegister_ReturnsRegisteredList(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Register batch 1
+	execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"pluginId": "test-plugin",
+		"files":    []string{"/tmp/file1"},
+	})
+	// Register batch 2 — should accumulate
+	m := execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"pluginId": "test-plugin",
+		"files":    []string{"/tmp/file2", "/tmp/file3"},
+	})
+
+	files := m["files"].([]interface{})
+	if len(files) != 3 {
+		t.Errorf("expected 3 accumulated files, got %d", len(files))
+	}
+	count, ok := m["count"].(float64)
+	if !ok || int(count) != 3 {
+		t.Errorf("count = %v, want 3", m["count"])
+	}
+}
+
+func TestFilesRegister_MissingPluginId_FallsBackToRequest(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// payload has no pluginId, but req.PluginID = "test"
+	m := execOK(t, r, "plugin.files.register", map[string]interface{}{
+		"files": []string{"/tmp/fallback-test"},
+	})
+	// The req in execOK uses PluginID: "test"
+	if m["pluginId"] != "test" {
+		t.Errorf("pluginId = %v, want test (from request field)", m["pluginId"])
+	}
+}
+
+func TestInstallPlan_PlanIdUnique(t *testing.T) {
+	r := New(fullPluginDeps(t))
+
+	m1 := execOK(t, r, "plugin.install", map[string]string{"pluginId": "plugin-a"})
+	m2 := execOK(t, r, "plugin.install", map[string]string{"pluginId": "plugin-b"})
+
+	pid1 := m1["planId"].(string)
+	pid2 := m2["planId"].(string)
+	if pid1 == pid2 {
+		t.Errorf("planIds should be unique: both are %q", pid1)
+	}
+	if pid1 == "" || pid2 == "" {
+		t.Error("planIds should not be empty")
+	}
+}
+
+func TestInstallExecute_PlanIdFromRequestLevel(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	plan := execOK(t, r, "plugin.install", map[string]string{"pluginId": "test-plugin"})
+	planID := plan["planId"].(string)
+
+	// Approve the plan
+	deps.Store.mu.Lock()
+	deps.Store.InstallPlans[planID].Status = "approved"
+	deps.Store.InstallPlans[planID].ApprovedAt = time.Now().UnixMilli()
+	deps.Store.mu.Unlock()
+
+	// Execute using request-level PlanID instead of payload planId
+	reqWithPlanID := &types.CapabilityRequest{
+		RequestID:  "test_req",
+		PluginID:   "test",
+		Capability: "plugin.install.execute",
+		Payload:    nil,
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+		PlanID:     planID,
+	}
+	result, err := r.Execute(reqWithPlanID)
+	if err != nil {
+		t.Fatalf("execute with request-level planId failed: %v", err)
+	}
+	res := normalize(result).(map[string]interface{})
+	if res["status"] != "completed" {
+		t.Errorf("status = %v, want completed", res["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Approval workflow integration tests
+// ---------------------------------------------------------------------------
+
+// planDeps creates deps with Config, Notifier, History, and PlanManager initialized.
+func planDeps(t *testing.T) *Deps {
+	t.Helper()
+	deps := fullPluginDeps(t)
+	store := plan.NewPlanStore()
+	deps.PlanManager = plan.NewManager(store, plan.DefaultHighRiskCaps)
+	return deps
+}
+
+func TestNotifyRequest_ReturnsRequestID(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Grant Permission Approval",
+		"body":    "Allow write access to /data?",
+		"detail":  "This will grant fs.write permission to the plugin.",
+		"timeout": 60,
+	})
+	if m["requestId"] == nil || m["requestId"] == "" {
+		t.Error("expected non-empty requestId")
+	}
+	if m["status"] != "pending" {
+		t.Errorf("status = %v, want pending", m["status"])
+	}
+}
+
+func TestNotifyRespond_Approve_UpdatesRequest(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create approval request
+	m := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Approve?",
+		"body":    "Should we continue?",
+		"timeout": 60,
+	})
+	requestID := m["requestId"].(string)
+
+	// Approve
+	resp := execOK(t, r, "notify.respond", map[string]interface{}{
+		"requestId": requestID,
+		"action":    "allow",
+	})
+	if resp["requestId"] != requestID {
+		t.Errorf("requestId = %v, want %v", resp["requestId"], requestID)
+	}
+	if resp["action"] != "allow" {
+		t.Errorf("action = %v, want allow", resp["action"])
+	}
+	if resp["status"] != "responded" {
+		t.Errorf("status = %v, want responded", resp["status"])
+	}
+
+	// Verify the approval recorded the response
+	apr := deps.Notifier.GetApproval(types.RequestID(requestID))
+	if apr == nil {
+		t.Fatal("approval request not found after respond")
+	}
+	if !apr.Responded {
+		t.Error("expected approval to be marked responded")
+	}
+	if apr.Response == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if apr.Response.Action != "allow" {
+		t.Errorf("response action = %v, want allow", apr.Response.Action)
+	}
+}
+
+func TestNotifyRespond_Deny_UpdatesRequest(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create approval request
+	m := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Deny test",
+		"body":    "Should be denied",
+		"timeout": 60,
+	})
+	requestID := m["requestId"].(string)
+
+	// Deny
+	resp := execOK(t, r, "notify.respond", map[string]interface{}{
+		"requestId": requestID,
+		"action":    "deny",
+	})
+	if resp["action"] != "deny" {
+		t.Errorf("action = %v, want deny", resp["action"])
+	}
+	if resp["status"] != "responded" {
+		t.Errorf("status = %v, want responded", resp["status"])
+	}
+
+	// Verify the approval recorded the denial
+	apr := deps.Notifier.GetApproval(types.RequestID(requestID))
+	if apr == nil {
+		t.Fatal("approval request not found")
+	}
+	if apr.Response.Action != "deny" {
+		t.Errorf("response action = %v, want deny", apr.Response.Action)
+	}
+}
+
+func TestNotifyRespond_Approve_UpdatesLinkedPlan(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create a plan via PlanManager directly
+	planReq := &types.CapabilityRequest{
+		RequestID:  "req_plan_test",
+		PluginID:   "test-plugin",
+		Capability: "fs.write",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	planID, err := deps.PlanManager.CreatePlan(planReq)
+	if err != nil {
+		t.Fatalf("CreatePlan failed: %v", err)
+	}
+
+	// Verify plan is pending
+	p, err := deps.PlanManager.GetPlan(planID)
+	if err != nil {
+		t.Fatalf("GetPlan failed: %v", err)
+	}
+	if p.State != plan.StatePending {
+		t.Errorf("plan state = %v, want %v", p.State, plan.StatePending)
+	}
+
+	// Create approval request linked to the plan
+	m := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Approve plan",
+		"body":    "Plan approval",
+		"planId":  planID,
+		"timeout": 60,
+	})
+	requestID := m["requestId"].(string)
+
+	// Approve via notify.respond — this should also update the plan
+	execOK(t, r, "notify.respond", map[string]interface{}{
+		"requestId": requestID,
+		"action":    "allow",
+	})
+
+	// Verify plan is now approved
+	p, err = deps.PlanManager.GetPlan(planID)
+	if err != nil {
+		t.Fatalf("GetPlan after approve: %v", err)
+	}
+	if p.State != plan.StateApproved {
+		t.Errorf("plan state = %v, want %v", p.State, plan.StateApproved)
+	}
+}
+
+func TestNotifyRespond_Deny_UpdatesLinkedPlan(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create a plan
+	planReq := &types.CapabilityRequest{
+		RequestID:  "req_plan_deny",
+		PluginID:   "test-plugin",
+		Capability: "fs.remove",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	planID, err := deps.PlanManager.CreatePlan(planReq)
+	if err != nil {
+		t.Fatalf("CreatePlan failed: %v", err)
+	}
+
+	// Create approval request linked to the plan
+	m := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Deny plan",
+		"body":    "Deny approval",
+		"planId":  planID,
+		"timeout": 60,
+	})
+	requestID := m["requestId"].(string)
+
+	// Deny via notify.respond
+	execOK(t, r, "notify.respond", map[string]interface{}{
+		"requestId": requestID,
+		"action":    "deny",
+	})
+
+	// Verify plan is now denied
+	p, err := deps.PlanManager.GetPlan(planID)
+	if err != nil {
+		t.Fatalf("GetPlan after deny: %v", err)
+	}
+	if p.State != plan.StateDenied {
+		t.Errorf("plan state = %v, want %v", p.State, plan.StateDenied)
+	}
+}
+
+func TestHighRiskGrant_WithoutPlan_RequiresApproval(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Try to grant a high-risk capability (e.g. plugin.uninstall)
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+	})
+	if m["status"] != "requires_approval" {
+		t.Errorf("status = %v, want requires_approval", m["status"])
+	}
+	// Should return a planId since PlanManager is available
+	if m["planId"] == nil || m["planId"] == "" {
+		t.Error("expected non-empty planId with PlanManager available")
+	}
+}
+
+func TestHighRiskGrant_WithApprovedPlan_Succeeds(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// First create and approve a plan for the high-risk capability
+	planReq := &types.CapabilityRequest{
+		RequestID:  "req_grant",
+		PluginID:   "test-plugin",
+		Capability: "plugin.uninstall",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	planID, err := deps.PlanManager.CreatePlan(planReq)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	if err := deps.PlanManager.ApprovePlan(planID, "tester"); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Now grant with the approved plan ID
+	reqWithPlan := &types.CapabilityRequest{
+		RequestID:  "test_req_grant",
+		PluginID:   "test",
+		Capability: "plugin.permissions.grant",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+		PlanID:     planID,
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+	})
+	reqWithPlan.Payload = data
+	result, err := r.Execute(reqWithPlan)
+	if err != nil {
+		t.Fatalf("grant with approved plan: %v", err)
+	}
+	m := normalize(result).(map[string]interface{})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+}
+
+func TestHighRiskGrant_WithDeniedPlan_Fails(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create and deny a plan
+	planReq := &types.CapabilityRequest{
+		RequestID:  "req_deny_grant",
+		PluginID:   "test-plugin",
+		Capability: "plugin.uninstall",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	planID, err := deps.PlanManager.CreatePlan(planReq)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	if err := deps.PlanManager.DenyPlan(planID, "tester", "not allowed"); err != nil {
+		t.Fatalf("DenyPlan: %v", err)
+	}
+
+	// Try to grant with denied plan
+	reqWithPlan := &types.CapabilityRequest{
+		RequestID:  "test_req_grant",
+		PluginID:   "test",
+		Capability: "plugin.permissions.grant",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+		PlanID:     planID,
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+	})
+	reqWithPlan.Payload = data
+	result, err := r.Execute(reqWithPlan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	m := normalize(result).(map[string]interface{})
+	if m["status"] != "approval_denied" {
+		t.Errorf("status = %v, want approval_denied", m["status"])
+	}
+}
+
+func TestAskGrant_RequiresApproval(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Grant with mode "ask" on a low-risk capability — requires plan approval
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read", // low-risk capability but "ask" mode
+		"mode":       "ask",
+	})
+	if m["status"] != "requires_approval" {
+		t.Errorf("status = %v, want requires_approval", m["status"])
+	}
+	// Should return a planId for the ask mode
+	if m["planId"] == nil || m["planId"] == "" {
+		t.Error("expected non-empty planId for ask mode")
 	}
 }

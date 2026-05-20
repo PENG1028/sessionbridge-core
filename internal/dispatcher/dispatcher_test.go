@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -47,6 +48,7 @@ type mockPlanner struct {
 	requiresPlan bool
 	planID       string
 	err          error
+	planState    string // plan state for ValidatePlan
 }
 
 func (m *mockPlanner) RequiresPlan(capability string) bool {
@@ -58,6 +60,22 @@ func (m *mockPlanner) CreatePlan(req *types.CapabilityRequest) (string, error) {
 		return "", m.err
 	}
 	return m.planID, nil
+}
+
+func (m *mockPlanner) ValidatePlan(planID string) error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.planState == "" || m.planState == "approved" {
+		return nil
+	}
+	if m.planState == "denied" {
+		return fmt.Errorf("plan %s was denied", planID)
+	}
+	if m.planState == "pending" {
+		return fmt.Errorf("plan %s is pending approval", planID)
+	}
+	return fmt.Errorf("plan not found: %s", planID)
 }
 
 type mockExecutor struct {
@@ -556,6 +574,127 @@ func TestDispatch_PlanCreationFailure(t *testing.T) {
 	}
 	if resp.Error == nil || resp.Error.Code != protocol.ErrCodePlanFailed {
 		t.Errorf("expected code %s, got %v", protocol.ErrCodePlanFailed, resp.Error)
+	}
+}
+
+// --- Plan approval gate tests ---
+
+func TestDispatch_HighRiskWithApprovedPlan_Executes(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "approved"},
+		&mockExecutor{result: "approved-execution"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "session.history.clear.execute"
+	req.PlanID = "plan_001"
+	resp := d.Dispatch(&req)
+
+	if !resp.OK {
+		t.Fatalf("expected OK with approved plan, got error: %v", resp.Error)
+	}
+	if resp.Payload != "approved-execution" {
+		t.Errorf("Payload = %v, want %q", resp.Payload, "approved-execution")
+	}
+	// Audit should have at least 2 entries (plan approved + execution success)
+	if audit.Count() < 2 {
+		t.Errorf("expected at least 2 audit entries, got %d", audit.Count())
+	}
+	// Check that one of the entries records plan approval
+	foundPlanApproved := false
+	for _, e := range audit.entries {
+		if e.allowed && e.detail == "plan approved: plan_001" {
+			foundPlanApproved = true
+			break
+		}
+	}
+	if !foundPlanApproved {
+		t.Error("expected an audit entry with detail 'plan approved: plan_001'")
+	}
+}
+
+func TestDispatch_HighRiskWithDeniedPlan_ReturnsApprovalDenied(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "denied"},
+		&mockExecutor{result: "ok"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "session.history.clear.execute"
+	req.PlanID = "plan_001"
+	resp := d.Dispatch(&req)
+
+	if resp.OK {
+		t.Fatal("expected failure for denied plan")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeApprovalDenied {
+		t.Errorf("expected code %s, got %v", protocol.ErrCodeApprovalDenied, resp.Error)
+	}
+}
+
+func TestDispatch_HighRiskWithPendingPlan_ReturnsApprovalRequired(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "pending"},
+		&mockExecutor{result: "ok"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "session.history.clear.execute"
+	req.PlanID = "plan_001"
+	resp := d.Dispatch(&req)
+
+	if resp.OK {
+		t.Fatal("expected failure for pending plan")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeApprovalRequired {
+		t.Errorf("expected code %s, got %v", protocol.ErrCodeApprovalRequired, resp.Error)
+	}
+}
+
+func TestDispatch_HighRiskPlanNotFound_ReturnsPlanRequired(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planState: "not_found"},
+		&mockExecutor{result: "ok"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "session.history.clear.execute"
+	req.PlanID = "plan_missing"
+	resp := d.Dispatch(&req)
+
+	if resp.OK {
+		t.Fatal("expected failure for missing plan")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodePlanRequired {
+		t.Errorf("expected code %s, got %v", protocol.ErrCodePlanRequired, resp.Error)
 	}
 }
 

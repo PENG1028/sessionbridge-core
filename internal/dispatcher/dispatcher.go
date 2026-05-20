@@ -1,6 +1,8 @@
 package dispatcher
 
 import (
+	"fmt"
+
 	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -35,6 +37,9 @@ type Planner interface {
 	RequiresPlan(capability string) bool
 	// CreatePlan creates a pending plan for the request. Returns the plan ID.
 	CreatePlan(req *types.CapabilityRequest) (string, error)
+	// ValidatePlan returns nil if the plan exists and is approved for execution.
+	// Returns an error if the plan is not found, not approved, denied, or expired.
+	ValidatePlan(planID string) error
 }
 
 // AuditLogger records capability calls for the audit trail.
@@ -137,20 +142,43 @@ func (d *Dispatcher) Dispatch(req *types.CapabilityRequest) *types.CapabilityRes
 	}
 
 	// Step 4.5: Plan Before Apply for high-risk capabilities.
-	if d.planner != nil && d.planner.RequiresPlan(req.Capability) && req.PlanID == "" {
-		planID, err := d.planner.CreatePlan(req)
-		if err != nil {
-			d.audit.Log(req, false, "plan creation failed: "+err.Error())
-			return errorResponse(req, protocol.ErrCodePlanFailed, err.Error())
+	if d.planner != nil && d.planner.RequiresPlan(req.Capability) {
+		if req.PlanID == "" {
+			// No plan provided: create one and return pending.
+			planID, err := d.planner.CreatePlan(req)
+			if err != nil {
+				d.audit.Log(req, false, "plan creation failed: "+err.Error())
+				return errorResponse(req, protocol.ErrCodePlanFailed, err.Error())
+			}
+			d.audit.Log(req, true, "plan created: "+planID)
+			return &types.CapabilityResponse{
+				RequestID: req.RequestID,
+				OK:        false,
+				Error:     &types.CoreError{Code: protocol.ErrCodePlanRequired, Message: "plan required — approve via plan.approve"},
+				PlanID:    planID,
+				PlanState: "pending",
+			}
 		}
-		d.audit.Log(req, true, "plan created: "+planID)
-		return &types.CapabilityResponse{
-			RequestID: req.RequestID,
-			OK:        false,
-			Error:     &types.CoreError{Code: protocol.ErrCodePlanRequired, Message: "plan required — approve via plan.approve"},
-			PlanID:    planID,
-			PlanState: "pending",
+		// Plan was provided: validate it before allowing execution.
+		if err := d.planner.ValidatePlan(req.PlanID); err != nil {
+			d.audit.Log(req, false, "plan validation failed: "+err.Error())
+			code := protocol.ErrCodeApprovalRequired
+			msg := err.Error()
+			deniedMsg := fmt.Sprintf("plan %s was denied", req.PlanID)
+			notFoundMsg := fmt.Sprintf("plan not found: %s", req.PlanID)
+			pendingMsg := fmt.Sprintf("plan %s is pending approval", req.PlanID)
+			if err.Error() == deniedMsg {
+				code = protocol.ErrCodeApprovalDenied
+				msg = fmt.Sprintf("plan %q was denied", req.PlanID)
+			} else if err.Error() == notFoundMsg {
+				code = protocol.ErrCodePlanRequired
+				msg = fmt.Sprintf("plan %q not found", req.PlanID)
+			} else if err.Error() == pendingMsg {
+				msg = fmt.Sprintf("plan %q is pending approval", req.PlanID)
+			}
+			return errorResponse(req, code, msg)
 		}
+		d.audit.Log(req, true, "plan approved: "+req.PlanID)
 	}
 
 	// Step 5: Route to target node

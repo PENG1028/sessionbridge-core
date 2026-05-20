@@ -7,10 +7,12 @@ import (
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
+	"github.com/user/sessionnode/go-core/internal/task"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -46,6 +48,14 @@ type Deps struct {
 	// CapResolver resolves capability support against the current platform.
 	// When nil, capability support checking is skipped (graceful degradation).
 	CapResolver *capability.Resolver
+	// TaskStore tracks long-running operations (install, uninstall, check, etc.).
+	// When nil, task capabilities degrade gracefully (empty list / not-found error).
+	TaskStore *task.Store
+	// Store holds install plans and registered plugin file paths.
+	Store *PlanStore
+	// PlanManager handles approval plan lifecycle (approve, deny) for high-risk operations.
+	// When nil, plan-linked approval is skipped (graceful degradation).
+	PlanManager *plan.Manager
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -145,9 +155,9 @@ func (r *Registry) registerDefaults() {
 	r.Register("plugin.cache.clear.plan", pluginCacheClearPlan)
 	r.Register("plugin.cache.clear.execute", pluginCacheClearExecute)
 	r.Register("plugin.files.list", pluginFilesList)
-	r.Register("plugin.files.register", notImplementedStub("plugin.files.register"))
-	r.Register("plugin.install.execute", notImplementedStub("plugin.install.execute"))
-	r.Register("plugin.uninstall", notImplementedStub("plugin.uninstall"))
+	r.Register("plugin.files.register", pluginFilesRegister)
+	r.Register("plugin.install.execute", pluginInstallExecute)
+	r.Register("plugin.uninstall", pluginUninstall)
 	r.Register("plugin.permissions.grant", pluginPermissionsGrant)
 	r.Register("plugin.permissions.revoke", pluginPermissionsRevoke)
 	r.Register("plugin.config.set", pluginConfigSet)
@@ -177,4 +187,7 @@ func (r *Registry) registerDefaults() {
 	r.Register("session.history.clear.execute", historyClearExecute)
 	r.Register("stream.replay", streamReplay)
 	r.Register("stream.tail", streamTail)
+
+	r.Register("task.list", taskList)
+	r.Register("task.info", taskInfo)
 }

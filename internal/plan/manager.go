@@ -67,3 +67,57 @@ func (m *Manager) CreatePlan(req *types.CapabilityRequest) (string, error) {
 	m.store.Create(p)
 	return id, nil
 }
+
+// GetPlan retrieves a plan by ID from the store.
+func (m *Manager) GetPlan(planID string) (*Plan, error) {
+	p := m.store.Get(planID)
+	if p == nil {
+		return nil, fmt.Errorf("plan not found: %s", planID)
+	}
+	return p, nil
+}
+
+// ApprovePlan transitions a plan from pending to approved state.
+func (m *Manager) ApprovePlan(planID, approvedBy string) error {
+	p, err := m.GetPlan(planID)
+	if err != nil {
+		return err
+	}
+	return p.Approve(approvedBy)
+}
+
+// DenyPlan transitions a plan from pending to denied state.
+func (m *Manager) DenyPlan(planID, deniedBy, reason string) error {
+	p, err := m.GetPlan(planID)
+	if err != nil {
+		return err
+	}
+	return p.Deny(deniedBy, reason)
+}
+
+// ValidatePlan returns nil if the plan exists and is approved (ready for execution).
+// Returns an error describing why the plan cannot be executed.
+func (m *Manager) ValidatePlan(planID string) error {
+	p, err := m.GetPlan(planID)
+	if err != nil {
+		return err
+	}
+	if p.IsExpired() {
+		// Auto-transition to expired state
+		p.Transition(StateExpired)
+		return fmt.Errorf("plan %s has expired", planID)
+	}
+	if p.State == StateDenied {
+		return fmt.Errorf("plan %s was denied", planID)
+	}
+	if p.State == StatePending {
+		return fmt.Errorf("plan %s is pending approval", planID)
+	}
+	if p.State == StateExpired {
+		return fmt.Errorf("plan %s has expired", planID)
+	}
+	if p.State != StateApproved {
+		return fmt.Errorf("plan %s is not in an executable state: %s", planID, p.State)
+	}
+	return nil
+}

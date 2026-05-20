@@ -89,12 +89,66 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 		return nil, fmt.Errorf("invalid mode: %q (must be allow, deny, or ask)", payload.Mode)
 	}
 
-	// High-risk capability check
+	// High-risk capability check — requires plan approval.
 	if isHighRiskCapability(payload.Capability) {
-		return map[string]interface{}{
-			"status":  "requires_approval",
-			"message": "High-risk operation requires approval",
-		}, nil
+		if deps.PlanManager != nil {
+			if req.PlanID == "" {
+				// No plan provided: create one and return pending.
+				planReq := *req
+				planReq.Capability = payload.Capability
+				planID, err := deps.PlanManager.CreatePlan(&planReq)
+				if err != nil {
+					return nil, fmt.Errorf("create plan: %w", err)
+				}
+				return map[string]interface{}{
+					"status":  "requires_approval",
+					"message": "High-risk operation requires approval",
+					"planId":  planID,
+				}, nil
+			}
+			// Plan ID provided: validate it before proceeding.
+			if err := deps.PlanManager.ValidatePlan(req.PlanID); err != nil {
+				return map[string]interface{}{
+					"status":   "approval_denied",
+					"message":  err.Error(),
+					"planId":   req.PlanID,
+				}, nil
+			}
+			// Plan is approved — fall through to grant below.
+		} else {
+			// PlanManager not available: return requires_approval without a plan.
+			return map[string]interface{}{
+				"status":  "requires_approval",
+				"message": "High-risk operation requires approval",
+			}, nil
+		}
+	}
+
+	// Low-risk ask mode also requires plan approval.
+	if payload.Mode == "ask" {
+		if deps.PlanManager != nil {
+			if req.PlanID == "" {
+				planReq := *req
+				planReq.Capability = payload.Capability
+				planID, err := deps.PlanManager.CreatePlan(&planReq)
+				if err != nil {
+					return nil, fmt.Errorf("create plan: %w", err)
+				}
+				return map[string]interface{}{
+					"status":  "requires_approval",
+					"message": "Ask mode requires approval via plan",
+					"planId":  planID,
+				}, nil
+			}
+			if err := deps.PlanManager.ValidatePlan(req.PlanID); err != nil {
+				return map[string]interface{}{
+					"status":   "approval_denied",
+					"message":  err.Error(),
+					"planId":   req.PlanID,
+				}, nil
+			}
+			// Plan is approved — fall through to grant below.
+		}
 	}
 
 	targetID := pluginID

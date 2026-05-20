@@ -19,4 +19,6 @@ const (
 	ErrCodeInternalError     = "INTERNAL_ERROR"
 	ErrCodePlanRequired      = "PLAN_REQUIRED"
 	ErrCodePlanFailed        = "PLAN_FAILED"
+	ErrCodeApprovalRequired  = "APPROVAL_REQUIRED"
+	ErrCodeApprovalDenied    = "APPROVAL_DENIED"
 )

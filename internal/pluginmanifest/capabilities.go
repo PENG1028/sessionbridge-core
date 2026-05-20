@@ -105,6 +105,10 @@ var KnownCapabilities = map[string]bool{
 	// System
 	"system.info": true,
 
+	// Task
+	"task.list": true,
+	"task.info": true,
+
 	// Session history
 	"session.history.getPolicy":       true,
 	"session.history.setPolicy":       true,
