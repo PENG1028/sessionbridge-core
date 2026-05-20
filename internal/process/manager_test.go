@@ -58,7 +58,7 @@ func TestSpawn_StartsProcess(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("echo", []string{"hello"}, "")
+	sid, err := m.Spawn("echo", []string{"hello"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestSpawn_OutputDelivery(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	_, err := m.Spawn("echo", []string{"hello world"}, "")
+	_, err := m.Spawn("echo", []string{"hello world"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestWriteStdin(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null; echo done"}, "")
+	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null; echo done"}, "", nil)
 	if err != nil {
 		t.Skipf("sh not available: %v", err)
 	}
@@ -136,13 +136,13 @@ func TestSignal_Kill(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sleep", []string{"60"}, "")
+	sid, err := m.Spawn("sleep", []string{"60"}, "", nil)
 	if err != nil {
 		t.Skipf("sleep not available: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
-	if err := m.Signal(sid, "SIGKILL"); err != nil {
+	if err := m.Signal(sid, "SIGKILL", false); err != nil {
 		t.Fatalf("Signal: %v", err)
 	}
 
@@ -165,8 +165,8 @@ func TestList_Count(t *testing.T) {
 		t.Errorf("expected 0 processes initially, got %d", m.Count())
 	}
 
-	m.Spawn("echo", []string{"a"}, "")
-	m.Spawn("echo", []string{"b"}, "")
+	m.Spawn("echo", []string{"a"}, "", nil)
+	m.Spawn("echo", []string{"b"}, "", nil)
 
 	if m.Count() != 2 {
 		t.Errorf("expected 2 processes, got %d", m.Count())
@@ -181,8 +181,8 @@ func TestCleanup_KillsAll(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
 
-	m.Spawn("sleep", []string{"60"}, "")
-	m.Spawn("sleep", []string{"60"}, "")
+	m.Spawn("sleep", []string{"60"}, "", nil)
+	m.Spawn("sleep", []string{"60"}, "", nil)
 
 	if m.Count() != 2 {
 		t.Fatalf("expected 2 processes before cleanup, got %d", m.Count())
@@ -200,7 +200,7 @@ func TestCloseStdin(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null"}, "")
+	sid, err := m.Spawn("sh", []string{"-c", "cat > /dev/null"}, "", nil)
 	if err != nil {
 		t.Skipf("sh not available: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestSignal_ProcessNotFound(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
 
-	err := m.Signal("nonexistent", "SIGTERM")
+	err := m.Signal("nonexistent", "SIGTERM", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent process")
 	}
@@ -245,7 +245,7 @@ func TestSpawn_MissingCommand(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	_, err := m.Spawn("nonexistent_command_xyz", nil, "")
+	_, err := m.Spawn("nonexistent_command_xyz", nil, "", nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent command")
 	}
@@ -256,7 +256,7 @@ func TestReadStream_RawBytes(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	_, err := m.Spawn("printf", []string{"partial_line"}, "")
+	_, err := m.Spawn("printf", []string{"partial_line"}, "", nil)
 	if err != nil {
 		// Fallback: echo -n might work in some shells.
 		t.Skipf("printf not available: %v", err)
@@ -281,7 +281,7 @@ func TestSpawnPTY_OnWindows(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
 
-	_, err := m.SpawnPTY("echo", []string{"test"}, "", 80, 40)
+	_, err := m.SpawnPTY("echo", []string{"test"}, "", 80, 40, nil)
 	if err == nil {
 		t.Skip("PTY is supported on this platform")
 	}
@@ -292,7 +292,7 @@ func TestResize_NoPTY(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("echo", []string{"test"}, "")
+	sid, err := m.Spawn("echo", []string{"test"}, "", nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestSpawn_MultipleOutputLines(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 	defer m.Cleanup()
 
-	sid, err := m.Spawn("sh", []string{"-c", "echo line1; echo line2; echo line3"}, "")
+	sid, err := m.Spawn("sh", []string{"-c", "echo line1; echo line2; echo line3"}, "", nil)
 	if err != nil {
 		t.Skipf("sh not available: %v", err)
 	}

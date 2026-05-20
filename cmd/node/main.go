@@ -81,6 +81,9 @@ func main() {
 		connRegistry.PushSessionEvent(sid, seq, eventType, data)
 	}
 	procManager = process.NewManager(wrappedPush, wrappedEvent)
+	procManager.SetOnSpawn(func(sid types.SessionID) {
+		historyStore.InitSession(sid, types.DefaultHistoryPolicy())
+	})
 
 	// Notifier — broadcasts notifications/approvals to all WebSocket clients
 	notifyMgr := notify.NewManager(connRegistry.Broadcast)

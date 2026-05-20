@@ -2,14 +2,16 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
 type streamSubscribePayload struct {
-	SessionID  string `json:"sessionId"`
-	Stream     string `json:"stream"`     // legacy
-	StreamType string `json:"streamType"` // canonical — prefer over "stream"
+	SessionID  string          `json:"sessionId"`
+	Stream     string          `json:"stream"`     // legacy
+	StreamType string          `json:"streamType"` // canonical — prefer over "stream"
+	FromSeq    types.EventSeq  `json:"fromSeq,omitempty"`
 }
 
 func streamSubscribe(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
@@ -26,28 +28,57 @@ func streamSubscribe(req *types.CapabilityRequest, deps *Deps) (interface{}, err
 		stream = p.StreamType
 	}
 	sid := types.SessionID(p.SessionID)
+
+	// Verify session or process exists before subscribing
 	sess := deps.Sessions.Get(sid)
-	if sess == nil {
+	proc := deps.Processes.Get(sid)
+	if sess == nil && proc == nil {
 		return nil, fmt.Errorf("session not found: %s", p.SessionID)
 	}
-	s, ok := sess.Streams[stream]
-	if !ok {
-		return nil, fmt.Errorf("unknown stream type: %s", stream)
+
+	// Parse stream types (comma-separated, e.g. "stdout,stderr")
+	streamTypes := strings.Split(stream, ",")
+	for i := range streamTypes {
+		streamTypes[i] = strings.TrimSpace(streamTypes[i])
 	}
 
-	// Register this connection's write channel for push routing.
-	// Without this, WS reconnect causes sessions to lose their push route
-	// because connRegistry unregisters all owned sessions on WS disconnect.
-	if req.WriteCh != nil {
-		deps.ConnRoutes.Register(sid, req.WriteCh)
+	// Register subscription using the multi-subscriber model.
+	sub := deps.ConnRoutes.Subscribe(req.ConnID, sid, streamTypes, req.PluginID, req.Actor, p.FromSeq)
+
+	result := map[string]interface{}{
+		"subscriptionId": sub.ID,
+		"sessionId":      p.SessionID,
+		"stream":         stream,
+		"streamType":     stream,
 	}
 
-	return map[string]interface{}{
-		"sessionId":  p.SessionID,
-		"stream":     stream,
-		"streamType": stream,
-		"data":       string(s.Read()),
-	}, nil
+	// Replay history events from fromSeq when specified (reconnect scenario).
+	if p.FromSeq > 0 && deps.History != nil {
+		for _, st := range streamTypes {
+			events, err := deps.History.Replay(sid, st, p.FromSeq)
+			if err == nil && len(events) > 0 {
+				out := make([]map[string]interface{}, len(events))
+				for i, evt := range events {
+					out[i] = eventToMap(evt)
+				}
+				result["events"] = out
+				result["replayCount"] = len(out)
+				break // return events from the first matching stream
+			}
+		}
+	}
+
+	// Fallback: replay session buffer (for new subscribers without fromSeq).
+	if p.FromSeq == 0 && sess != nil {
+		for _, st := range streamTypes {
+			if s, ok := sess.Streams[st]; ok {
+				result["data"] = string(s.Read())
+				break
+			}
+		}
+	}
+
+	return result, nil
 }
 
 type streamWritePayload struct {

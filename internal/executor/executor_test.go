@@ -2,15 +2,22 @@ package executor
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/user/sessionnode/go-core/internal/config"
+	"github.com/user/sessionnode/go-core/internal/history"
+	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
+	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -29,6 +36,28 @@ func normalize(v interface{}) interface{} {
 		return v
 	}
 	return out
+}
+
+// createTempBinary creates a small executable in a temp dir and prepends that dir to PATH.
+// Returns the binary name (without path or extension) for use in check specs.
+// Cleans up via t.TempDir() and t.Setenv().
+func createTempBinary(t *testing.T, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		binPath := filepath.Join(dir, name+".bat")
+		if err := os.WriteFile(binPath, []byte("@echo off\r\nexit /b 0\r\n"), 0644); err != nil {
+			t.Fatalf("createTempBinary(%s): %v", name, err)
+		}
+	} else {
+		binPath := filepath.Join(dir, name)
+		if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+			t.Fatalf("createTempBinary(%s): %v", name, err)
+		}
+	}
+	oldPATH := os.Getenv("PATH")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+oldPATH)
+	return name
 }
 
 func testDeps(t *testing.T) *Deps {
@@ -247,12 +276,19 @@ func TestStreamSubscribe_MissingID(t *testing.T) {
 func TestStreamSubscribe_UnknownStream(t *testing.T) {
 	r := New(testDeps(t))
 	sid := extractSid(t, r)
-	_, err := r.Execute(req("stream.subscribe", map[string]string{
+	m, err := r.Execute(req("stream.subscribe", map[string]string{
 		"sessionId": sid,
 		"stream":    "nonexistent",
 	}))
-	if err == nil {
-		t.Fatal("expected error for unknown stream type")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	res := m.(map[string]interface{})
+	if res["subscriptionId"] == "" {
+		t.Fatal("expected non-empty subscriptionId")
+	}
+	if res["sessionId"] != sid {
+		t.Errorf("sessionId = %v, want %s", res["sessionId"], sid)
 	}
 }
 
@@ -639,7 +675,7 @@ func TestStreamWriteWithStreamType(t *testing.T) {
 func TestProcessWriteStdin(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	sid, err := pm.Spawn("cat", nil, "")
+	sid, err := pm.Spawn("cat", nil, "", nil)
 	if err != nil {
 		t.Fatalf("spawn cat failed: %v", err)
 	}
@@ -656,13 +692,13 @@ func TestProcessWriteStdin(t *testing.T) {
 func TestProcessSignal_Kill(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	sid, err := pm.Spawn("sleep", []string{"30"}, "")
+	sid, err := pm.Spawn("sleep", []string{"30"}, "", nil)
 	if err != nil {
 		t.Fatalf("spawn sleep failed: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	if err := pm.Signal(sid, "SIGKILL"); err != nil {
+	if err := pm.Signal(sid, "SIGKILL", false); err != nil {
 		t.Fatalf("Signal failed: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -674,7 +710,7 @@ func TestProcessSignal_Kill(t *testing.T) {
 
 func TestProcessSignal_NotFound(t *testing.T) {
 	deps := testDeps(t)
-	err := deps.Processes.Signal("nonexistent", "SIGTERM")
+	err := deps.Processes.Signal("nonexistent", "SIGTERM", false)
 	if err == nil {
 		t.Fatal("expected error for nonexistent process")
 	}
@@ -699,8 +735,8 @@ func TestProcessList_Empty(t *testing.T) {
 func TestProcessCleanup(t *testing.T) {
 	deps := testDeps(t)
 	pm := deps.Processes
-	pm.Spawn("sleep", []string{"30"}, "")
-	pm.Spawn("sleep", []string{"30"}, "")
+	pm.Spawn("sleep", []string{"30"}, "", nil)
+	pm.Spawn("sleep", []string{"30"}, "", nil)
 	if pm.Count() != 2 {
 		t.Fatalf("expected 2 processes, got %d", pm.Count())
 	}
@@ -722,6 +758,270 @@ func TestPluginCheck_ReturnsOK(t *testing.T) {
 	}
 	if m["pluginId"] != "sessionnode-core" {
 		t.Errorf("pluginId = %v, want sessionnode-core", m["pluginId"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// plugin.check real dependency checks
+// ---------------------------------------------------------------------------
+
+// checkDeps creates Deps with a manifest that has the given environment checks.
+func checkDeps(t *testing.T, checks []pluginmanifest.EnvCheckSpec) *Deps {
+	t.Helper()
+	deps := fullPluginDeps(t)
+	deps.Manifests = &mockManifestLoader{
+		manifest: &pluginmanifest.Manifest{
+			ID:   "test-plugin",
+			Core: &pluginmanifest.CoreSpec{
+				Environment: pluginmanifest.EnvironmentSpec{
+					Checks: checks,
+				},
+			},
+		},
+	}
+	return deps
+}
+
+func TestPluginCheck_Binary_Found(t *testing.T) {
+	bin := createTempBinary(t, "testtool")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "testtool", Type: "binary", Command: bin, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("binary %q status = %v, want ok", bin, d["status"])
+	}
+}
+
+func TestPluginCheck_Binary_Missing(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "nonexistent", Type: "binary", Command: "this-command-does-not-exist-xyzzy", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "missing" {
+		t.Errorf("missing binary status = %v, want missing", d["status"])
+	}
+}
+
+func TestPluginCheck_Env_Found(t *testing.T) {
+	t.Setenv("TEST_PLUGIN_CHECK_EXISTS", "1")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "test-var", Type: "env", Command: "TEST_PLUGIN_CHECK_EXISTS", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("env %q status = %v, want ok", "TEST_PLUGIN_CHECK_EXISTS", d["status"])
+	}
+}
+
+func TestPluginCheck_Env_Missing(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "missing", Type: "env", Command: "THIS_ENV_DOES_NOT_EXIST_XYZZY", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "missing" {
+		t.Errorf("missing env status = %v, want missing", d["status"])
+	}
+}
+
+func TestPluginCheck_RequiredMissing_FailsOverall(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "missing", Type: "binary", Command: "this-command-does-not-exist-xyzzy", Required: true},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "incomplete" {
+		t.Errorf("overall status = %v, want incomplete (required dep missing)", m["status"])
+	}
+}
+
+func TestPluginCheck_OptionalMissing_DoesNotFailOverall(t *testing.T) {
+	bin := createTempBinary(t, "foundtool")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "found", Type: "binary", Command: bin, Required: false},
+		{ID: "missing", Type: "binary", Command: "this-command-does-not-exist-xyzzy", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "ok" {
+		t.Errorf("overall status = %v, want ok (optional deps only)", m["status"])
+	}
+}
+
+func TestPluginCheck_BinaryEmptyCommand_ReturnsSkipped(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "empty", Type: "binary", Command: "", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "skipped" {
+		t.Errorf("empty binary status = %v, want skipped", d["status"])
+	}
+}
+
+func TestPluginCheck_UnknownType_ReturnsUnknown(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "weird", Type: "invalid_type", Command: "anything", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "unknown" {
+		t.Errorf("unknown type status = %v, want unknown", d["status"])
+	}
+}
+
+func TestPluginCheck_PathExists(t *testing.T) {
+	dir := t.TempDir()
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "tmpdir", Type: "path", Command: dir, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("existing path status = %v, want ok", d["status"])
+	}
+}
+
+func TestPluginCheck_PathMissing(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "missing", Type: "path", Command: "/tmp/nonexistent-path-xyzzy", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "missing" {
+		t.Errorf("missing path status = %v, want missing", d["status"])
+	}
+}
+
+func TestPluginCheck_File_Existing(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "testfile", Type: "file", Command: filePath, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("existing file status = %v, want ok", d["status"])
+	}
+}
+
+func TestPluginCheck_Directory_Existing(t *testing.T) {
+	dir := t.TempDir()
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "testdir", Type: "directory", Command: dir, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("existing directory status = %v, want ok", d["status"])
+	}
+}
+
+func TestPluginCheck_Directory_WhenFile_ReturnsTypeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "testfile", Type: "directory", Command: filePath, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "type_mismatch" {
+		t.Errorf("file-as-directory status = %v, want type_mismatch", d["status"])
+	}
+}
+
+func TestPluginCheck_Command_Check(t *testing.T) {
+	bin := createTempBinary(t, "cmdcheck")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "cmdcheck", Type: "command", Command: bin, Args: "status", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	if d["status"] != "ok" {
+		t.Errorf("command %q status = %v, want ok", bin, d["status"])
+	}
+}
+
+func TestPluginCheck_MultipleChecksAllOK(t *testing.T) {
+	bin := createTempBinary(t, "multitool")
+	t.Setenv("TEST_MULTI_ENV", "1")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "multi-bin", Type: "binary", Command: bin, Required: true},
+		{ID: "multi-env", Type: "env", Command: "TEST_MULTI_ENV", Required: false},
+		{ID: "multi-cmd", Type: "command", Command: bin, Args: "ok", Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "ok" {
+		t.Errorf("overall status = %v, want ok", m["status"])
+	}
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 3 {
+		t.Errorf("expected 3 dependencies, got %d", len(depsResult))
+	}
+}
+
+func TestPluginCheck_RequiredAndOptionalMixed(t *testing.T) {
+	bin := createTempBinary(t, "mixedtool")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "required-missing", Type: "binary", Command: "this-command-does-not-exist-xyzzy", Required: true},
+		{ID: "optional-missing", Type: "binary", Command: "another-nonexistent-cmd", Required: false},
+		{ID: "found", Type: "binary", Command: bin, Required: true},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "incomplete" {
+		t.Errorf("overall status = %v, want incomplete (one required missing)", m["status"])
 	}
 }
 
@@ -750,5 +1050,469 @@ func TestPluginCacheClear_ReturnsNotImplemented(t *testing.T) {
 	m := execOK(t, r, "plugin.cache.clear", map[string]string{"pluginId": "sessionnode-core"})
 	if m["status"] != "not_implemented" {
 		t.Errorf("status = %v, want not_implemented", m["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// new plugin management tests
+// ---------------------------------------------------------------------------
+
+type mockManifestLoader struct {
+	manifest *pluginmanifest.Manifest
+}
+
+func (m *mockManifestLoader) LoadManifest(pluginID string) (*pluginmanifest.Manifest, error) {
+	if m.manifest == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	return m.manifest, nil
+}
+
+func (m *mockManifestLoader) ListPlugins() []pluginmanifest.PluginSummary {
+	if m.manifest == nil {
+		return nil
+	}
+	return []pluginmanifest.PluginSummary{
+		{ID: m.manifest.ID, Name: m.manifest.Name, Version: m.manifest.Version, Enabled: true},
+	}
+}
+
+func (m *mockManifestLoader) PluginEnabled(pluginID string) bool {
+	return m.manifest != nil && m.manifest.ID == pluginID
+}
+
+// fullPluginDeps returns deps with Config, Notifier, and History initialized.
+func fullPluginDeps(t *testing.T) *Deps {
+	t.Helper()
+	deps := testDeps(t)
+	cm := config.NewManager(filepath.Join(t.TempDir(), "config.json"))
+	if err := cm.Load(); err != nil {
+		t.Fatalf("config load: %v", err)
+	}
+	deps.Config = cm
+	deps.History = history.New("")
+	deps.Notifier = notify.NewManager(func(msg *protocol.Message) {})
+	return deps
+}
+
+// TestPluginEnable verifies enabling a disabled plugin.
+func TestPluginEnable(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Initially disable the plugin
+	deps.Config.Set("plugin.disabledPlugins", []string{"test-plugin"})
+
+	m := execOK(t, r, "plugin.enable", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "enabled" {
+		t.Errorf("status = %v, want enabled", m["status"])
+	}
+	if m["pluginId"] != "test-plugin" {
+		t.Errorf("pluginId = %v, want test-plugin", m["pluginId"])
+	}
+
+	// Verify it's no longer in DisabledPlugins
+	cfg := deps.Config.Get()
+	for _, id := range cfg.Plugin.DisabledPlugins {
+		if id == "test-plugin" {
+			t.Error("test-plugin should not be in DisabledPlugins after enable")
+		}
+	}
+}
+
+// TestPluginEnable_AlreadyEnabled verifies enabling an already-enabled plugin.
+func TestPluginEnable_AlreadyEnabled(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.enable", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "already_enabled" {
+		t.Errorf("status = %v, want already_enabled", m["status"])
+	}
+}
+
+// TestPluginDisable verifies disabling a plugin.
+func TestPluginDisable(t *testing.T) {
+	deps := fullPluginDeps(t)
+	// Set up manifests so PluginEnabled returns true
+	deps.Manifests = &mockManifestLoader{
+		manifest: &pluginmanifest.Manifest{ID: "test-plugin"},
+	}
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.disable", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "disabled" {
+		t.Errorf("status = %v, want disabled", m["status"])
+	}
+	if m["pluginId"] != "test-plugin" {
+		t.Errorf("pluginId = %v, want test-plugin", m["pluginId"])
+	}
+
+	// Verify it's now in DisabledPlugins
+	cfg := deps.Config.Get()
+	found := false
+	for _, id := range cfg.Plugin.DisabledPlugins {
+		if id == "test-plugin" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test-plugin should be in DisabledPlugins after disable")
+	}
+}
+
+// TestPluginDisable_Builtin verifies that disabling the core plugin returns an error.
+func TestPluginDisable_Builtin(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("plugin.disable", map[string]string{"pluginId": "sessionnode-core"}))
+	if err == nil {
+		t.Fatal("expected error for disabling built-in plugin")
+	}
+	if !strings.Contains(err.Error(), "cannot disable built-in") {
+		t.Errorf("error = %v, want 'cannot disable built-in'", err)
+	}
+}
+
+// TestPluginDisable_AlreadyDisabled verifies disabling an already-disabled plugin.
+func TestPluginDisable_AlreadyDisabled(t *testing.T) {
+	deps := fullPluginDeps(t)
+	deps.Config.Set("plugin.disabledPlugins", []string{"test-plugin"})
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.disable", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "already_disabled" {
+		t.Errorf("status = %v, want already_disabled", m["status"])
+	}
+}
+
+// TestPluginConfigSet verifies setting a config value.
+func TestPluginConfigSet(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.config.set", map[string]interface{}{
+		"key":   "disabledPlugins",
+		"value": []string{"test-plugin"},
+	})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+	if m["revision"] == nil {
+		t.Error("revision should be set")
+	}
+
+	// Verify the value was actually set
+	cfg := deps.Config.Get()
+	found := false
+	for _, id := range cfg.Plugin.DisabledPlugins {
+		if id == "test-plugin" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test-plugin should be in DisabledPlugins")
+	}
+}
+
+// TestPluginConfigSet_MissingKey verifies error when key is missing.
+func TestPluginConfigSet_MissingKey(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("plugin.config.set", map[string]interface{}{
+		"value": "test",
+	}))
+	if err == nil {
+		t.Fatal("expected error for missing key")
+	}
+}
+
+// TestPluginConfigSet_WithRevision verifies setting config with expected revision.
+func TestPluginConfigSet_WithRevision(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Get current revision
+	rev := deps.Config.Get().Revision
+
+	m := execOK(t, r, "plugin.config.set", map[string]interface{}{
+		"key":              "disabledPlugins",
+		"value":            []string{"test"},
+		"expectedRevision": rev,
+	})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+}
+
+// TestPluginConfigSet_Conflict verifies config revision conflict.
+func TestPluginConfigSet_Conflict(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.config.set", map[string]interface{}{
+		"key":              "disabledPlugins",
+		"value":            []string{"test"},
+		"expectedRevision": 99999, // wrong revision
+	})
+	if m["status"] != "conflict" {
+		t.Errorf("status = %v, want conflict", m["status"])
+	}
+	if m["expectedRevision"] == nil {
+		t.Error("expectedRevision should be set in conflict response")
+	}
+	if m["actualRevision"] == nil {
+		t.Error("actualRevision should be set in conflict response")
+	}
+}
+
+// TestPluginPermissionsGrant verifies granting a permission.
+func TestPluginPermissionsGrant(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+		"mode":       "allow",
+	})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+	if m["capability"] != "fs.read" {
+		t.Errorf("capability = %v, want fs.read", m["capability"])
+	}
+	if m["mode"] != "allow" {
+		t.Errorf("mode = %v, want allow", m["mode"])
+	}
+}
+
+// TestPluginPermissionsGrant_DefaultMode verifies mode defaults to "allow".
+func TestPluginPermissionsGrant_DefaultMode(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+	})
+	if m["mode"] != "allow" {
+		t.Errorf("mode = %v, want allow", m["mode"])
+	}
+}
+
+// TestPluginPermissionsGrant_HighRisk verifies high-risk operations require approval.
+func TestPluginPermissionsGrant_HighRisk(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+	})
+	if m["status"] != "requires_approval" {
+		t.Errorf("status = %v, want requires_approval", m["status"])
+	}
+}
+
+// TestPluginPermissionsGrant_InvalidMode verifies invalid mode returns an error.
+func TestPluginPermissionsGrant_InvalidMode(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+		"mode":       "invalid",
+	}))
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), "invalid mode") {
+		t.Errorf("error = %v, want 'invalid mode'", err)
+	}
+}
+
+// TestPluginPermissionsRevoke verifies revoking a permission.
+func TestPluginPermissionsRevoke(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// First grant a permission
+	execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+		"mode":       "allow",
+	})
+
+	// Then revoke it
+	m := execOK(t, r, "plugin.permissions.revoke", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+	})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+
+	// Verify the grant was removed
+	cfg := deps.Config.Get()
+	if cfg.Plugin.Permissions != nil {
+		if inner, ok := cfg.Plugin.Permissions["test-plugin"]; ok {
+			if _, exists := inner["fs.read"]; exists {
+				t.Error("fs.read grant should have been removed")
+			}
+		}
+	}
+}
+
+// TestPluginPermissionsRevoke_MissingCapability verifies error when capability is missing.
+func TestPluginPermissionsRevoke_MissingCapability(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("plugin.permissions.revoke", map[string]interface{}{
+		"pluginId": "test-plugin",
+	}))
+	if err == nil {
+		t.Fatal("expected error for missing capability")
+	}
+}
+
+// TestPluginCacheClearPlan_NoCacheId verifies error when cacheId is missing.
+func TestPluginCacheClearPlan_NoCacheId(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("plugin.cache.clear.plan", map[string]string{
+		"pluginId": "test-plugin",
+	}))
+	if err == nil {
+		t.Fatal("expected error for missing cacheId")
+	}
+}
+
+// TestPluginCacheClearExecute_NoPlanId verifies error when planId is missing.
+func TestPluginCacheClearExecute_NoPlanId(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.cache.clear.execute", map[string]string{
+		"pluginId": "test-plugin",
+		"cacheId":  "test-cache",
+	})
+	if m["status"] != "plan_required" {
+		t.Errorf("status = %v, want plan_required", m["status"])
+	}
+}
+
+// TestNotImplementedStub verifies that stub capabilities return not_implemented.
+func TestNotImplementedStub(t *testing.T) {
+	r := New(testDeps(t))
+
+	// Test each stub via direct registry call
+	stubs := []string{
+		"plugin.install.execute",
+		"plugin.uninstall",
+		"plugin.files.register",
+	}
+	for _, capName := range stubs {
+		m := execOK(t, r, capName, map[string]string{"pluginId": "test"})
+		if m["status"] != "not_implemented" {
+			t.Errorf("%s: status = %v, want not_implemented", capName, m["status"])
+		}
+	}
+}
+
+// TestPluginPermissionsList_WithGrant verifies permissions list includes grant state.
+func TestPluginPermissionsList_WithGrant(t *testing.T) {
+	deps := fullPluginDeps(t)
+	deps.Manifests = &mockManifestLoader{
+		manifest: &pluginmanifest.Manifest{
+			ID:   "test-plugin",
+			Core: &pluginmanifest.CoreSpec{
+				Permissions: []pluginmanifest.PermissionSpec{
+					{
+						ID:           "fs-read",
+						Description:  "Read files",
+						Capabilities: []string{"fs.read"},
+						Default:      "ask",
+					},
+				},
+			},
+		},
+	}
+	r := New(deps)
+
+	// First grant a permission
+	execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "fs.read",
+		"mode":       "allow",
+	})
+
+	// List permissions with pluginId that matches the manifest
+	m := execOK(t, r, "plugin.permissions.list", map[string]string{"pluginId": "test-plugin"})
+	perms := m["permissions"].([]interface{})
+	if len(perms) == 0 {
+		t.Fatal("expected non-empty permissions list")
+	}
+
+	perm := perms[0].(map[string]interface{})
+	grant, ok := perm["grant"]
+	if !ok {
+		t.Fatal("expected grant field in permission entry")
+	}
+	grantMap := grant.(map[string]interface{})
+	if grantMap["mode"] != "allow" {
+		t.Errorf("grant.mode = %v, want allow", grantMap["mode"])
+	}
+}
+
+// TestPluginHistory_RecordsEvents verifies history records plugin events.
+func TestPluginHistory_RecordsEvents(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	// Perform an operation that records history
+	deps.Config.Set("plugin.disabledPlugins", []string{"test-plugin"})
+	execOK(t, r, "plugin.enable", map[string]string{"pluginId": "test-plugin"})
+
+	// Query history
+	m := execOK(t, r, "plugin.history", map[string]string{"pluginId": "test-plugin"})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+	events := m["events"].([]interface{})
+	if len(events) == 0 {
+		t.Error("expected at least one history event")
+	}
+}
+
+// TestPluginConfigGet_IncludesRevision verifies config.get includes revision.
+func TestPluginConfigGet_IncludesRevision(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.config.get", map[string]string{"pluginId": "test-plugin"})
+	if m["revision"] == nil {
+		t.Error("revision should be included in config.get response")
+	}
+}
+
+// TestPluginCacheInfo verifies cache.info returns empty list when no manifest.
+func TestPluginCacheInfo(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "plugin.cache.info", map[string]string{"pluginId": "test-plugin"})
+	caches, ok := m["caches"].([]interface{})
+	if !ok {
+		t.Fatalf("caches is not an array: %T", m["caches"])
+	}
+	if len(caches) != 0 {
+		t.Errorf("expected empty caches, got %d", len(caches))
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,15 +22,27 @@ type EventFunc func(sid types.SessionID, seq types.EventSeq, eventType string, d
 
 // Process represents a running or completed OS process.
 type Process struct {
-	SessionID types.SessionID
-	Cmd       *exec.Cmd
-	State     string
-	ExitCode  int
-	CreatedAt int64
-	PID       int
-	StdinPipe io.WriteCloser
-	ptyMaster *os.File // non-nil for PTY sessions
-	pty       bool     // true when spawned via SpawnPTY
+	SessionID        types.SessionID
+	ParentSessionID  types.SessionID // parent process session ID (empty if root)
+	RootSessionID    types.SessionID // root of the process tree
+	PluginID         types.PluginID  // plugin that owns this process
+	Kind             string          // process kind: "terminal", "task", "agent", etc.
+	Cmd              *exec.Cmd
+	State            string
+	ExitCode         int
+	CreatedAt        int64
+	PID              int
+	StdinPipe        io.WriteCloser
+	ptyMaster        *os.File // non-nil for PTY sessions
+	pty              bool     // true when spawned via SpawnPTY
+}
+
+// SpawnConfig carries optional metadata for spawning a process.
+// Pass nil to Spawn/SpawnPTY for default values.
+type SpawnConfig struct {
+	PluginID        types.PluginID
+	Kind            string
+	ParentSessionID types.SessionID
 }
 
 // Manager spawns and tracks OS processes, pushing their output via callbacks.
@@ -39,6 +52,7 @@ type Manager struct {
 	pusher    PushFunc
 	eventer   EventFunc
 	seq       atomic.Int64
+	onSpawn   func(types.SessionID) // called before output goroutines start
 }
 
 // NewManager creates a ProcessManager.
@@ -50,8 +64,18 @@ func NewManager(pusher PushFunc, eventer EventFunc) *Manager {
 	}
 }
 
+// SetOnSpawn registers a callback that fires when a new process is spawned,
+// called with the session ID before any output-reading goroutines start.
+// This is useful for initializing associated resources (e.g. history store)
+// before any output data arrives.
+func (m *Manager) SetOnSpawn(fn func(types.SessionID)) {
+	m.onSpawn = fn
+}
+
 // Spawn starts a new OS process. Returns the session ID and any error.
-func (m *Manager) Spawn(command string, args []string, cwd string) (types.SessionID, error) {
+// stdout and stderr are merged into a single "stdout" stream (same as PTY).
+// cfg carries optional metadata (plugin ID, kind, parent); pass nil for defaults.
+func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnConfig) (types.SessionID, error) {
 	cmd := exec.Command(command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -61,47 +85,87 @@ func (m *Manager) Spawn(command string, args []string, cwd string) (types.Sessio
 	if err != nil {
 		return "", fmt.Errorf("stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+
+	// Create a single output pipe manually and redirect both stdout and stderr
+	// to it. This ensures we close the write end ourselves after Start(),
+	// since on Windows the closeAfterStart mechanism doesn't reliably break
+	// Read on the read end.
+	outReader, outWriter, err := os.Pipe()
 	if err != nil {
-		return "", fmt.Errorf("stdout pipe: %w", err)
+		return "", fmt.Errorf("output pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("stderr pipe: %w", err)
-	}
+	cmd.Stdout = outWriter
+	cmd.Stderr = outWriter
 
 	if err := cmd.Start(); err != nil {
+		outWriter.Close()
+		outReader.Close()
 		return "", fmt.Errorf("start: %w", err)
 	}
+
+	// Close the write end now that the child has inherited it.
+	// This ensures the read end will get EOF after the process exits
+	// (once the child's inherited handles are also closed).
+	outWriter.Close()
 
 	now := time.Now()
 	sid := types.SessionID(fmt.Sprintf("sess_proc_%d_%d", cmd.Process.Pid, now.UnixMilli()))
 
+	// Resolve tree metadata.
+	parentSID := types.SessionID("")
+	rootSID := types.SessionID("")
+	pluginID := types.PluginID("")
+	kind := ""
+	if cfg != nil {
+		parentSID = cfg.ParentSessionID
+		pluginID = cfg.PluginID
+		kind = cfg.Kind
+	}
+	if parentSID != "" {
+		if parent := m.processes[parentSID]; parent != nil {
+			if parent.RootSessionID != "" {
+				rootSID = parent.RootSessionID
+			} else {
+				rootSID = parentSID
+			}
+		}
+	}
+
 	proc := &Process{
-		SessionID: sid,
-		Cmd:       cmd,
-		State:     "running",
-		CreatedAt: now.UnixMilli(),
-		PID:       cmd.Process.Pid,
-		StdinPipe: stdin,
+		SessionID:       sid,
+		ParentSessionID: parentSID,
+		RootSessionID:   rootSID,
+		PluginID:        pluginID,
+		Kind:            kind,
+		Cmd:             cmd,
+		State:           "running",
+		CreatedAt:       now.UnixMilli(),
+		PID:             cmd.Process.Pid,
+		StdinPipe:       stdin,
 	}
 
 	m.mu.Lock()
 	m.processes[sid] = proc
 	m.mu.Unlock()
 
+	// Fire onSpawn hook before any output goroutines start.
+	if m.onSpawn != nil {
+		m.onSpawn(sid)
+	}
+
 	m.pushEvent(sid, "started", map[string]interface{}{"pid": proc.PID})
 
-	// Track readers completion
-	var readersWg sync.WaitGroup
-	readersWg.Add(2)
-	go m.readStream(sid, "stdout", stdout, &readersWg)
-	go m.readStream(sid, "stderr", stderr, &readersWg)
+	// Single reader for merged stdout+stderr.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go m.readStream(sid, "stdout", outReader, &wg)
 
-	// Wait for all output to be read, then wait for process exit
+	// Wait for process exit, then ensure the reader completes.
+	// On some Windows configurations the pipe read end may not see EOF
+	// after the child exits, so we force-close the reader with a timeout.
 	go func() {
-		readersWg.Wait()
-
+		// Wait for the process to exit first (this ensures the child's
+		// write handles are closed by the OS).
 		exitErr := cmd.Wait()
 		exitCode := 0
 		if exitErr != nil {
@@ -111,6 +175,24 @@ func (m *Manager) Spawn(command string, args []string, cwd string) (types.Sessio
 				log.Printf("[process] session %s wait error: %v", sid, exitErr)
 				exitCode = -1
 			}
+		}
+
+		// Now wait for the reader to drain remaining pipe data.
+		// If the reader doesn't complete in time (possible on Windows
+		// where pipe EOF isn't reliably signaled), force-close the
+		// read end to unblock it.
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+			// Reader finished normally.
+		case <-time.After(500 * time.Millisecond):
+			log.Printf("[process] session %s read timeout, closing reader", sid)
+			outReader.Close()
+			wg.Wait() // wait for reader to exit after forced close
 		}
 
 		m.mu.Lock()
@@ -133,8 +215,32 @@ func (m *Manager) Get(sid types.SessionID) *Process {
 	return m.processes[sid]
 }
 
-// Signal sends a signal to the process.
-func (m *Manager) Signal(sid types.SessionID, signal string) error {
+// DescendantIDs returns all descendant session IDs for the given process,
+// performing a breadth-first traversal of the process tree.
+func (m *Manager) DescendantIDs(sid types.SessionID) []types.SessionID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []types.SessionID
+	queue := []types.SessionID{sid}
+	visited := map[types.SessionID]bool{sid: true}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for id, p := range m.processes {
+			if p.ParentSessionID == current && !visited[id] {
+				visited[id] = true
+				result = append(result, id)
+				queue = append(queue, id)
+			}
+		}
+	}
+	return result
+}
+
+// Signal sends a signal to the process. If tree is true, also signals
+// all descendant processes in the process tree.
+func (m *Manager) Signal(sid types.SessionID, signal string, tree bool) error {
 	m.mu.Lock()
 	proc, ok := m.processes[sid]
 	m.mu.Unlock()
@@ -144,6 +250,23 @@ func (m *Manager) Signal(sid types.SessionID, signal string) error {
 	if proc.State != "running" {
 		return fmt.Errorf("process %s is not running (state: %s)", sid, proc.State)
 	}
+	if err := sendSignal(proc, signal); err != nil {
+		return err
+	}
+	if tree {
+		for _, childID := range m.DescendantIDs(sid) {
+			m.mu.Lock()
+			child, ok := m.processes[childID]
+			m.mu.Unlock()
+			if ok && child.State == "running" {
+				sendSignal(child, signal)
+			}
+		}
+	}
+	return nil
+}
+
+func sendSignal(proc *Process, signal string) error {
 	switch signal {
 	case "kill", "SIGKILL", "terminate", "SIGTERM":
 		return proc.Cmd.Process.Kill()
@@ -180,7 +303,13 @@ func (m *Manager) WriteStdin(sid types.SessionID, data string) error {
 	if proc.StdinPipe == nil {
 		return fmt.Errorf("process %s has no stdin pipe", sid)
 	}
-	_, err := io.WriteString(proc.StdinPipe, data)
+	// Pipe-based processes (non-PTY) expect \n as line terminator,
+	// but xterm sends \r. Convert to avoid buffered input on Windows.
+	writeData := data
+	if !proc.pty {
+		writeData = strings.ReplaceAll(data, "\r", "\n")
+	}
+	_, err := io.WriteString(proc.StdinPipe, writeData)
 	if err != nil {
 		return fmt.Errorf("stdin write error: %w", err)
 	}

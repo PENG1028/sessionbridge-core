@@ -1176,6 +1176,140 @@ func TestStore_StdinNotSavedByDefault(t *testing.T) {
 	}
 }
 
+func TestStore_StdinRedacted_StdoutStderrUnaffected(t *testing.T) {
+	s := New("")
+	sid := types.SessionID("sess_stdin_stdout")
+	policy := types.DefaultHistoryPolicy()
+	policy.MaxBytes = 1 << 20
+	policy.Streams = []string{"stdout", "stderr", "stdin"}
+
+	if err := s.InitSession(sid, policy); err != nil {
+		t.Fatalf("InitSession: %v", err)
+	}
+
+	s.Record(sid, "stdout", 1, "visible output\n")
+	s.Record(sid, "stderr", 2, "visible error\n")
+	s.Record(sid, "stdin", 3, "hidden input\n")
+
+	events, err := s.Replay(sid, "", 1)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	// stdout must not be redacted
+	if events[0].Data != "visible output\n" {
+		t.Errorf("stdout data = %q, want %q", events[0].Data, "visible output\n")
+	}
+	// stderr must not be redacted
+	if events[1].Data != "visible error\n" {
+		t.Errorf("stderr data = %q, want %q", events[1].Data, "visible error\n")
+	}
+	// stdin must be redacted
+	if events[2].Data != "[stdin redacted]" {
+		t.Errorf("stdin data = %q, want %q", events[2].Data, "[stdin redacted]")
+	}
+}
+
+func TestStore_StdinRedacted_LargeData(t *testing.T) {
+	s := New("")
+	sid := types.SessionID("sess_stdin_large")
+	policy := types.DefaultHistoryPolicy()
+	policy.MaxBytes = 1 << 20
+	policy.Streams = []string{"stdout", "stdin"}
+
+	if err := s.InitSession(sid, policy); err != nil {
+		t.Fatalf("InitSession: %v", err)
+	}
+
+	// Record a very large stdin payload
+	large := string(make([]byte, 100_000))
+	s.Record(sid, "stdin", 1, large)
+
+	// Bytes stored should reflect only the redacted string length, not the raw data
+	stats, err := s.Stats(sid)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	// [stdin redacted] = 17 bytes
+	if stats.BytesStored != 16 {
+		t.Errorf("BytesStored = %d, want 16 (redacted len)", stats.BytesStored)
+	}
+	if stats.EventCount != 1 {
+		t.Errorf("EventCount = %d, want 1", stats.EventCount)
+	}
+
+	events, err := s.Replay(sid, "stdin", 1)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Data != "[stdin redacted]" {
+		t.Errorf("data = %q", events[0].Data)
+	}
+}
+
+func TestStore_StdinRedacted_MultipleEvents(t *testing.T) {
+	s := New("")
+	sid := types.SessionID("sess_stdin_multi")
+	policy := types.DefaultHistoryPolicy()
+	policy.MaxBytes = 1 << 20
+	policy.Streams = []string{"stdin"}
+
+	if err := s.InitSession(sid, policy); err != nil {
+		t.Fatalf("InitSession: %v", err)
+	}
+
+	s.Record(sid, "stdin", 1, "secret1\n")
+	s.Record(sid, "stdin", 2, "secret2\n")
+	s.Record(sid, "stdin", 3, "secret3\n")
+
+	events, err := s.Replay(sid, "stdin", 1)
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	for i, e := range events {
+		if e.Data != "[stdin redacted]" {
+			t.Errorf("event[%d].Data = %q, want %q", i, e.Data, "[stdin redacted]")
+		}
+	}
+}
+
+func TestStore_StdinRedacted_Tail(t *testing.T) {
+	s := New("")
+	sid := types.SessionID("sess_stdin_tail")
+	policy := types.DefaultHistoryPolicy()
+	policy.MaxBytes = 1 << 20
+	policy.Streams = []string{"stdout", "stdin"}
+
+	if err := s.InitSession(sid, policy); err != nil {
+		t.Fatalf("InitSession: %v", err)
+	}
+
+	s.Record(sid, "stdout", 1, "output\n")
+	s.Record(sid, "stdin", 2, "hidden\n")
+	s.Record(sid, "stdin", 3, "also hidden\n")
+
+	events, err := s.Tail(sid, "stdin", 2)
+	if err != nil {
+		t.Fatalf("Tail: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	for i, e := range events {
+		if e.Data != "[stdin redacted]" {
+			t.Errorf("tail event[%d].Data = %q", i, e.Data)
+		}
+	}
+}
+
 func TestStore_StdinSavedWhenExplicitlyConfigured(t *testing.T) {
 	s := New("")
 	sid := types.SessionID("sess_stdin_explicit")
@@ -1187,7 +1321,7 @@ func TestStore_StdinSavedWhenExplicitlyConfigured(t *testing.T) {
 		t.Fatalf("InitSession: %v", err)
 	}
 
-	s.Record(sid, "stdin", 1, "explicit input\n")
+	s.Record(sid, "stdin", 1, "sensitive input\n")
 
 	events, err := s.Replay(sid, "stdin", 1)
 	if err != nil {
@@ -1196,7 +1330,15 @@ func TestStore_StdinSavedWhenExplicitlyConfigured(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected 1 stdin event, got %d", len(events))
 	}
-	if events[0].Data != "explicit input\n" {
-		t.Errorf("data = %q", events[0].Data)
+	// Data must be redacted even when stdin is explicitly in policy.Streams
+	if events[0].Data != "[stdin redacted]" {
+		t.Errorf("data = %q, want %q", events[0].Data, "[stdin redacted]")
+	}
+	// Metadata (stream, type) must be preserved
+	if events[0].Stream != "stdin" {
+		t.Errorf("Stream = %q, want %q", events[0].Stream, "stdin")
+	}
+	if events[0].Type != "stream.stdin" {
+		t.Errorf("Type = %q, want %q", events[0].Type, "stream.stdin")
 	}
 }

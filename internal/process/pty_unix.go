@@ -17,7 +17,8 @@ import (
 // SpawnPTY starts a new OS process with a PTY (pseudo-terminal).
 // The PTY merges stdout and stderr into a single "stdout" stream and
 // supports interactive programs (vim, top, shells, etc.).
-func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows int) (types.SessionID, error) {
+// cfg carries optional metadata; pass nil for defaults.
+func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows int, cfg *SpawnConfig) (types.SessionID, error) {
 	cmd := exec.Command(command, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -39,19 +40,48 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 	now := time.Now()
 	sid := types.SessionID(fmt.Sprintf("sess_pty_%d_%d", cmd.Process.Pid, now.UnixMilli()))
 
+	// Resolve tree metadata.
+	parentSID := types.SessionID("")
+	rootSID := types.SessionID("")
+	pluginID := types.PluginID("")
+	kind := ""
+	if cfg != nil {
+		parentSID = cfg.ParentSessionID
+		pluginID = cfg.PluginID
+		kind = cfg.Kind
+	}
+	if parentSID != "" {
+		if parent := m.processes[parentSID]; parent != nil {
+			if parent.RootSessionID != "" {
+				rootSID = parent.RootSessionID
+			} else {
+				rootSID = parentSID
+			}
+		}
+	}
+
 	proc := &Process{
-		SessionID: sid,
-		Cmd:       cmd,
-		State:     "running",
-		CreatedAt: now.UnixMilli(),
-		PID:       cmd.Process.Pid,
-		ptyMaster: master,
-		pty:       true,
+		SessionID:       sid,
+		ParentSessionID: parentSID,
+		RootSessionID:   rootSID,
+		PluginID:        pluginID,
+		Kind:            kind,
+		Cmd:             cmd,
+		State:           "running",
+		CreatedAt:       now.UnixMilli(),
+		PID:             cmd.Process.Pid,
+		ptyMaster:       master,
+		pty:             true,
 	}
 
 	m.mu.Lock()
 	m.processes[sid] = proc
 	m.mu.Unlock()
+
+	// Fire onSpawn hook before any output goroutines start.
+	if m.onSpawn != nil {
+		m.onSpawn(sid)
+	}
 
 	m.pushEvent(sid, "started", map[string]interface{}{"pid": proc.PID})
 

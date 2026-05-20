@@ -39,12 +39,21 @@ type sessionHistory struct {
 	eventsFile *os.File
 }
 
+// PluginEvent records a plugin lifecycle event (enable, disable, permission grant, etc.).
+type PluginEvent struct {
+	PluginID  string      `json:"pluginId"`
+	EventType string      `json:"eventType"`
+	Data      interface{} `json:"data,omitempty"`
+	Timestamp int64       `json:"timestamp"`
+}
+
 // Store manages session history for all sessions.
 // It is safe for concurrent use.
 type Store struct {
-	mu       sync.RWMutex
-	sessions map[types.SessionID]*sessionHistory
-	baseDir  string
+	mu           sync.RWMutex
+	sessions     map[types.SessionID]*sessionHistory
+	baseDir      string
+	pluginEvents map[string][]PluginEvent // pluginID -> events
 }
 
 // New creates a history Store with the given base directory for disk mode.
@@ -54,8 +63,9 @@ func New(baseDir string) *Store {
 		baseDir = defaultBaseDir
 	}
 	return &Store{
-		sessions: make(map[types.SessionID]*sessionHistory),
-		baseDir:  baseDir,
+		sessions:     make(map[types.SessionID]*sessionHistory),
+		baseDir:      baseDir,
+		pluginEvents: make(map[string][]PluginEvent),
 	}
 }
 
@@ -113,6 +123,15 @@ func (s *Store) Record(sid types.SessionID, streamType string, seq types.EventSe
 	// Check if this stream type is in the policy
 	if !sh.trackStream(streamType) {
 		return
+	}
+
+	// Stdin redaction: never store raw stdin data in history.
+	// This is a defense-in-depth measure — even if a caller explicitly
+	// includes "stdin" in policy.Streams, the raw content is replaced.
+	// The event metadata (timestamp, seq, stream type) is still recorded
+	// so replay consumers can detect that stdin activity occurred.
+	if streamType == "stdin" {
+		data = "[stdin redacted]"
 	}
 
 	evt := types.HistoryEvent{
@@ -345,6 +364,34 @@ func (s *Store) Cleanup() {
 		sh.mu.Unlock()
 	}
 	s.sessions = make(map[types.SessionID]*sessionHistory)
+}
+
+// --- Plugin event support ---
+
+// RecordPluginEvent records a plugin lifecycle event.
+func (s *Store) RecordPluginEvent(pluginID string, eventType string, data interface{}) {
+	evt := PluginEvent{
+		PluginID:  pluginID,
+		EventType: eventType,
+		Data:      data,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	s.mu.Lock()
+	s.pluginEvents[pluginID] = append(s.pluginEvents[pluginID], evt)
+	s.mu.Unlock()
+}
+
+// QueryPluginEvents returns all recorded events for the given plugin.
+func (s *Store) QueryPluginEvents(pluginID string) []PluginEvent {
+	s.mu.RLock()
+	events := s.pluginEvents[pluginID]
+	s.mu.RUnlock()
+	if events == nil {
+		return []PluginEvent{}
+	}
+	out := make([]PluginEvent, len(events))
+	copy(out, events)
+	return out
 }
 
 // --- internal helpers ---

@@ -414,8 +414,30 @@ func TestWSProcessSpawnAndStream(t *testing.T) {
 		t.Errorf("RequestID = %q, want req_spawn", resp.RequestID)
 	}
 
-	// After spawn, the server pushes stream.chunk messages.
-	// Read up to 10 messages looking for stdout data.
+	// Extract sessionId from spawn response
+	var spawnResult map[string]interface{}
+	json.Unmarshal(resp.Payload, &spawnResult)
+	sid, _ := spawnResult["sessionId"].(string)
+	if sid == "" {
+		t.Fatal("spawn response missing sessionId")
+	}
+
+	// In the multi-subscriber model, subscribe explicitly to receive process output.
+	subPayload, _ := json.Marshal(map[string]string{
+		"sessionId":  sid,
+		"streamType": "stdout,stderr",
+	})
+	subResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_sub",
+		Capability: "stream.subscribe",
+		Payload:    subPayload,
+	})
+	if !subResp.OK {
+		t.Fatalf("stream.subscribe failed: %v", subResp.Error)
+	}
+
+	// Read push messages — expect stream.chunk and session.event.
 	foundStdout := false
 	foundExited := false
 	for i := 0; i < 10; i++ {
@@ -683,6 +705,9 @@ func testServerWithHistory(t *testing.T) (*Server, *httptest.Server, *history.St
 		cr.PushSessionEvent(sid, seq, eventType, data)
 	}
 	pm := process.NewManager(wrappedPush, wrappedEvent)
+	pm.SetOnSpawn(func(sid types.SessionID) {
+		historyStore.InitSession(sid, types.DefaultHistoryPolicy())
+	})
 
 	execDeps := &executor.Deps{
 		Sessions:   sessStore,
@@ -915,26 +940,7 @@ func TestTerminalPluginE2E(t *testing.T) {
 	// Wait for process to finish and history to capture output.
 	time.Sleep(1 * time.Second)
 
-	// Verify history captured output via direct store access (not stream.replay)
-	histEvents, err := hStore.Replay(types.SessionID(sessionID), "stdout", 0)
-	if err != nil {
-		t.Fatalf("history.Replay failed: %v", err)
-	}
-	if len(histEvents) == 0 {
-		t.Fatal("expected at least 1 replayed event from process output (direct history check)")
-	}
-	hasHistoryData := false
-	for _, evt := range histEvents {
-		if evt.Data != "" {
-			hasHistoryData = true
-			break
-		}
-	}
-	if !hasHistoryData {
-		t.Error("expected non-empty data in history events")
-	}
-
-	// Also verify via stream.replay WebSocket request.
+	// Verify via stream.replay WebSocket request.
 	// Use sendAndRecvRequestID to discard any push messages (stream.chunk, session events)
 	// that arrived after the process finished.
 	replayResp := sendAndRecvRequestID(t, conn, &protocol.Message{

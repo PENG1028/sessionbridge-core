@@ -310,6 +310,43 @@ func (m *Manager) PluginGrant(pluginID, capability string) *PermissionGrant {
 	return &g
 }
 
+// SetPermissionGrant sets the permission grant for (pluginID, capability).
+// Unlike dot-notation Set, this handles capability names containing dots.
+func (m *Manager) SetPermissionGrant(pluginID, capability, mode string, constraints map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.config.Plugin.Permissions == nil {
+		m.config.Plugin.Permissions = make(map[string]map[string]PermissionGrant)
+	}
+	if m.config.Plugin.Permissions[pluginID] == nil {
+		m.config.Plugin.Permissions[pluginID] = make(map[string]PermissionGrant)
+	}
+	m.config.Plugin.Permissions[pluginID][capability] = PermissionGrant{
+		Mode:        mode,
+		Constraints: constraints,
+	}
+	m.config.Revision++
+	log.Printf("[config] permission grant: %s/%s = %s (rev %d)", pluginID, capability, mode, m.config.Revision)
+	return m.saveLocked()
+}
+
+// RemovePermissionGrant removes a permission grant for (pluginID, capability).
+func (m *Manager) RemovePermissionGrant(pluginID, capability string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.config.Plugin.Permissions != nil {
+		if inner, ok := m.config.Plugin.Permissions[pluginID]; ok {
+			delete(inner, capability)
+			m.config.Revision++
+			log.Printf("[config] permission revoke: %s/%s (rev %d)", pluginID, capability, m.config.Revision)
+			return m.saveLocked()
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Dot-notation Set
 // ---------------------------------------------------------------------------
@@ -382,6 +419,11 @@ func setField(v reflect.Value, parts []string, value interface{}) error {
 		existing := v.MapIndex(keyVal)
 
 		if len(rest) == 0 {
+			// nil value removes the key from the map.
+			if value == nil {
+				v.SetMapIndex(keyVal, reflect.Value{})
+				return nil
+			}
 			// Set the map value directly.
 			val := reflect.ValueOf(value)
 			if !val.Type().AssignableTo(v.Type().Elem()) {
@@ -502,6 +544,26 @@ func setReflectValue(target reflect.Value, value interface{}) error {
 			}
 		case reflect.Int, reflect.Int64:
 			target.SetBool(val.Int() != 0)
+			return nil
+		}
+	}
+
+	// Handle []interface{} → typed slice (common when value comes from JSON decode).
+	if val.Kind() == reflect.Slice && val.Type().Elem().Kind() == reflect.Interface {
+		if target.Kind() == reflect.Slice {
+			elemType := target.Type().Elem()
+			slice := reflect.MakeSlice(target.Type(), 0, val.Len())
+			for i := 0; i < val.Len(); i++ {
+				elem := val.Index(i).Elem()
+				if elem.Type().AssignableTo(elemType) {
+					slice = reflect.Append(slice, elem)
+				} else if elem.Type().ConvertibleTo(elemType) {
+					slice = reflect.Append(slice, elem.Convert(elemType))
+				} else {
+					return fmt.Errorf("cannot set %s from %T: element %d is %T", target.Type(), value, i, elem.Interface())
+				}
+			}
+			target.Set(slice)
 			return nil
 		}
 	}

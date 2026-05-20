@@ -229,13 +229,20 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	writeWg.Add(1)
 	go s.writeLoop(conn, writeCh, &writeWg)
 
+	// Register this connection in the multi-subscriber registry.
+	wsConn := s.connRegistry.RegisterConn(writeCh, types.Actor{
+		Type: "web",
+		ID:   r.RemoteAddr,
+	})
+	connID := wsConn.ID
+
+	log.Printf("[ws] client connected from %s (conn=%s)", r.RemoteAddr, connID)
+
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 		return nil
 	})
-
-	log.Printf("[ws] client connected from %s", r.RemoteAddr)
 
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -246,17 +253,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		resp := s.handleMessage(raw, writeCh)
+		resp := s.handleMessage(raw, connID)
 		if resp == nil {
 			continue
-		}
-
-		// Register push route for session-creating capabilities.
-		if resp.OK && resp.Payload != nil {
-			sid := extractSessionID(resp.Payload)
-			if sid != "" {
-				s.connRegistry.Register(sid, writeCh)
-			}
 		}
 
 		respBytes, err := resp.MarshalJSON()
@@ -272,12 +271,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cleanup: remove all routes owned by this connection's write channel.
-	// Using RemoveAllForCh instead of per-sid unregister avoids a race where
-	// a new WS connection re-registers a session (via process.spawn response or
-	// stream.subscribe) before the old connection's cleanup runs — per-sid
-	// cleanup would then delete the new connection's route.
-	s.connRegistry.RemoveAllForCh(writeCh)
+	// Cleanup: remove this connection and all its subscriptions.
+	// Using UnregisterConn (which removes by connection ID) instead of
+	// per-session cleanup ensures that if a new WS connection has already
+	// re-subscribed to the same sessions, the new subscriptions are not
+	// affected by this cleanup.
+	s.connRegistry.UnregisterConn(connID)
 
 	close(writeCh)
 	writeWg.Wait()
@@ -296,7 +295,7 @@ func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.Wait
 	}
 }
 
-func (s *Server) handleMessage(raw []byte, writeCh chan<- []byte) *protocol.Message {
+func (s *Server) handleMessage(raw []byte, connID string) *protocol.Message {
 	msg, err := protocol.UnmarshalMessage(raw)
 	if err != nil {
 		log.Printf("[server] unmarshal error: %v", err)
@@ -311,11 +310,11 @@ func (s *Server) handleMessage(raw []byte, writeCh chan<- []byte) *protocol.Mess
 	case msg.Type == protocol.MsgTypeHello:
 		return protocol.NewWelcome(msg.NodeID)
 	default:
-		return s.dispatchAction(msg, writeCh)
+		return s.dispatchAction(msg, connID)
 	}
 }
 
-func (s *Server) dispatchAction(msg *protocol.Message, writeCh chan<- []byte) *protocol.Message {
+func (s *Server) dispatchAction(msg *protocol.Message, connID string) *protocol.Message {
 	capability := msg.Capability
 	if capability == "" {
 		capability = msg.Type
@@ -336,6 +335,7 @@ func (s *Server) dispatchAction(msg *protocol.Message, writeCh chan<- []byte) *p
 		TargetNodeID: msg.TargetNodeID,
 		Payload:      msg.Payload,
 		Timestamp:    msg.Timestamp,
+		ConnID:       connID,
 		Actor: types.Actor{
 			Type:  actorType,
 			ID:    actorID,
