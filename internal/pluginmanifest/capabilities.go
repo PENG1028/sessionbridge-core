@@ -1,20 +1,26 @@
 package pluginmanifest
 
-// KnownCapabilities is the set of all capabilities known to Core.
+// KnownCapabilities is the DESIGNED set of all capabilities known to Core.
+// It intentionally includes capabilities not yet implemented in the executor.
+// The executor registers its IMPLEMENTED subset via Registry.registerDefaults().
+// Test TestRegisteredCapabilitiesInKnownList in package executor ensures no
+// implemented capability is missing from this list.
 var KnownCapabilities = map[string]bool{
 	// Node
-	"node.list":      true,
-	"node.info":      true,
-	"node.health":    true,
+	"node.list":       true,
+	"node.info":       true,
+	"node.health":     true,
 	"node.disconnect": true,
 
 	// Session
-	"session.create": true,
-	"session.list":   true,
-	"session.get":    true,
-	"session.stop":   true,
-	"session.events": true,
-	"session.replay": true,
+	"session.create":  true,
+	"session.list":    true,
+	"session.get":     true,
+	"session.info":    true,
+	"session.stop":    true,
+	"session.destroy": true,
+	"session.events":  true,
+	"session.replay":  true,
 
 	// Process
 	"process.spawn":  true,
@@ -36,6 +42,7 @@ var KnownCapabilities = map[string]bool{
 	"fs.read":   true,
 	"fs.write":  true,
 	"fs.delete": true,
+	"fs.remove": true,
 	"fs.stat":   true,
 	"fs.mkdir":  true,
 	"fs.rename": true,
@@ -53,9 +60,9 @@ var KnownCapabilities = map[string]bool{
 	"env.unset":       true,
 
 	// Config
-	"config.get":  true,
-	"config.set":  true,
-	"config.list": true,
+	"config.get":   true,
+	"config.set":   true,
+	"config.list":  true,
 	"config.watch": true,
 
 	// Logs
@@ -69,40 +76,42 @@ var KnownCapabilities = map[string]bool{
 	"notify.respond": true,
 
 	// Plugin management
-	"plugin.list":              true,
-	"plugin.get":              true,
-	"plugin.status":           true,
-	"plugin.enable":           true,
-	"plugin.disable":          true,
-	"plugin.check":            true,
-	"plugin.install.plan":     true,
-	"plugin.install.execute":  true,
-	"plugin.uninstall":        true,
-	"plugin.files.list":       true,
-	"plugin.files.register":   true,
-	"plugin.cache.list":       true,
-	"plugin.cache.info":       true,
-	"plugin.cache.clear":      true,
-	"plugin.cache.clear.plan": true,
-	"plugin.cache.clear.execute": true,
-	"plugin.permissions.list": true,
-	"plugin.permissions.grant": true,
-	"plugin.permissions.revoke": true,
-	"plugin.config.get":       true,
-	"plugin.config.set":       true,
-	"plugin.config.schema":    true,
-	"plugin.history":          true,
+	"plugin.list":                 true,
+	"plugin.get":                  true,
+	"plugin.info":                 true,
+	"plugin.status":               true,
+	"plugin.enable":               true,
+	"plugin.disable":              true,
+	"plugin.check":                true,
+	"plugin.install":              true,
+	"plugin.install.plan":         true,
+	"plugin.install.execute":      true,
+	"plugin.uninstall":            true,
+	"plugin.files.list":           true,
+	"plugin.files.register":       true,
+	"plugin.cache.list":           true,
+	"plugin.cache.info":           true,
+	"plugin.cache.clear":          true,
+	"plugin.cache.clear.plan":     true,
+	"plugin.cache.clear.execute":  true,
+	"plugin.permissions.list":     true,
+	"plugin.permissions.grant":    true,
+	"plugin.permissions.revoke":   true,
+	"plugin.config.get":           true,
+	"plugin.config.set":           true,
+	"plugin.config.schema":        true,
+	"plugin.history":              true,
 
 	// System
 	"system.info": true,
 
 	// Session history
-	"session.history.getPolicy":  true,
-	"session.history.setPolicy":  true,
-	"session.history.stats":      true,
-	"session.history.list":       true,
-	"session.history.clear.plan": true,
-	"session.history.clear.execute": true,
+	"session.history.getPolicy":       true,
+	"session.history.setPolicy":       true,
+	"session.history.stats":           true,
+	"session.history.list":            true,
+	"session.history.clear.plan":      true,
+	"session.history.clear.execute":   true,
 }
 
 // DangerousCapabilities are capabilities that must NOT have default: allow
@@ -112,6 +121,7 @@ var DangerousCapabilities = map[string]bool{
 	"stream.write":               true,
 	"fs.write":                   true,
 	"fs.delete":                  true,
+	"fs.remove":                  true,
 	"plugin.install.execute":      true,
 	"plugin.cache.clear.execute":  true,
 	"config.set":                 true,
