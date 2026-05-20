@@ -18,6 +18,7 @@ type CapabilityRequest struct {
 	Capability   string           `json:"capability"`             // e.g. "fs.list", "process.spawn"
 	Payload      json.RawMessage  `json:"payload,omitempty"`      // deferred deserialization
 	Timestamp    int64            `json:"timestamp"`              // unix millis
+	PlanID       string           `json:"planId,omitempty"`       // approved plan ID for high-risk capabilities
 }
 
 // CapabilityResponse is the universal response envelope for all capability calls.
@@ -26,6 +27,8 @@ type CapabilityResponse struct {
 	OK        bool         `json:"ok"`
 	Payload   interface{}  `json:"payload,omitempty"`
 	Error     *CoreError   `json:"error,omitempty"`
+	PlanID    string       `json:"planId,omitempty"`   // plan ID if a plan was created
+	PlanState string       `json:"planState,omitempty"` // plan state for pending plans
 }
 
 // CoreError is a structured error returned by the Core.

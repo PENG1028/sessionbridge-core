@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/user/sessionnode/go-core/internal/config"
+	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -37,6 +38,7 @@ type Deps struct {
 	Notifier   *notify.Manager
 	Config     *config.Manager
 	Nodes      NodeLister
+	History    *history.Store
 }
 
 // Registry maps capability names to handler functions.
@@ -117,4 +119,14 @@ func (r *Registry) registerDefaults() {
 	r.Register("notify.send", notifySend)
 	r.Register("notify.request", notifyRequest)
 	r.Register("notify.respond", notifyRespond)
+
+	// History & Replay
+	r.Register("session.history.getPolicy", historyGetPolicy)
+	r.Register("session.history.setPolicy", historySetPolicy)
+	r.Register("session.history.stats", historyStats)
+	r.Register("session.history.list", historyList)
+	r.Register("session.history.clear.plan", historyClearPlan)
+	r.Register("session.history.clear.execute", historyClearExecute)
+	r.Register("stream.replay", streamReplay)
+	r.Register("stream.tail", streamTail)
 }

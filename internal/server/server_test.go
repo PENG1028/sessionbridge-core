@@ -11,6 +11,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/auth"
 	"github.com/user/sessionnode/go-core/internal/dispatcher"
 	"github.com/user/sessionnode/go-core/internal/executor"
+	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/permission"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -44,6 +45,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 		auth.NewTokenAuthenticator(""),
 		&mockPluginRegistry{},
 		permChecker,
+		nil, /* planner */
 		execReg,
 		audit,
 		topo,
@@ -495,6 +497,357 @@ func TestHealthCheckContentType(t *testing.T) {
 	ct := resp.Header.Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+func TestWSHistoryE2E(t *testing.T) {
+	_, srv, hStore := testServerWithHistory(t)
+	defer srv.Close()
+	defer hStore.Cleanup()
+
+	conn := wsConnect(t, srv)
+	defer conn.Close()
+
+	// Step 1: session.create with explicit history policy
+	createPayload := json.RawMessage(`{"command":"bash","history":{"enabled":true,"mode":"memory","streams":["stdout","stderr"]}}`)
+	createMsg := protocol.NewSessionCreate("shell", "", createPayload)
+	createMsg.RequestID = "req_c1"
+	createResp := sendAndRecv(t, conn, createMsg)
+	if !createResp.OK {
+		t.Fatalf("session.create failed: %v", createResp.Error)
+	}
+	var createBody map[string]interface{}
+	if err := json.Unmarshal(createResp.Payload, &createBody); err != nil {
+		t.Fatalf("unmarshal create: %v", err)
+	}
+	sessionID, ok := createBody["sessionId"].(string)
+	if !ok || sessionID == "" {
+		t.Fatal("expected sessionId in create response")
+	}
+
+	// Step 2: stream.write — writes to session buffer AND records into history
+	writePayload := json.RawMessage(`{"sessionId":"` + sessionID + `","stream":"stdout","data":"hello from E2E"}`)
+	writeResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_w1",
+		Capability: "stream.write",
+		Payload:    writePayload,
+	})
+	if !writeResp.OK {
+		t.Fatalf("stream.write failed: %v", writeResp.Error)
+	}
+
+	// Step 3: stream.replay — verify history captured the data
+	replayPayload := json.RawMessage(`{"sessionId":"` + sessionID + `","streamType":"stdout"}`)
+	replayResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_r1",
+		Capability: "stream.replay",
+		Payload:    replayPayload,
+	})
+	if !replayResp.OK {
+		t.Fatalf("stream.replay failed: %v", replayResp.Error)
+	}
+	var replayBody map[string]interface{}
+	if err := json.Unmarshal(replayResp.Payload, &replayBody); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	events, ok := replayBody["events"].([]interface{})
+	if !ok {
+		t.Fatalf("expected events array, got %T", replayBody["events"])
+	}
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 replayed event")
+	}
+	firstEvent := events[0].(map[string]interface{})
+	if data, ok := firstEvent["data"].(string); ok {
+		if !strings.Contains(data, "hello from E2E") {
+			t.Errorf("expected data containing 'hello from E2E', got %q", data)
+		}
+	}
+
+	// Step 4: session.history.stats
+	statsPayload := json.RawMessage(`{"sessionId":"` + sessionID + `"}`)
+	statsResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_st1",
+		Capability: "session.history.stats",
+		Payload:    statsPayload,
+	})
+	if !statsResp.OK {
+		t.Fatalf("session.history.stats failed: %v", statsResp.Error)
+	}
+	var statsBody map[string]interface{}
+	if err := json.Unmarshal(statsResp.Payload, &statsBody); err != nil {
+		t.Fatalf("unmarshal stats: %v", err)
+	}
+	if ec, ok := statsBody["eventCount"].(float64); !ok || ec < 1 {
+		t.Errorf("expected eventCount >= 1, got %v", statsBody["eventCount"])
+	}
+	if bs, ok := statsBody["bytesStored"].(float64); !ok || bs < 1 {
+		t.Errorf("expected bytesStored >= 1, got %v", statsBody["bytesStored"])
+	}
+	if mode, ok := statsBody["mode"].(string); !ok || mode != "memory" {
+		t.Errorf("expected mode 'memory', got %v", statsBody["mode"])
+	}
+
+	// Step 5: session.history.getPolicy
+	policyPayload := json.RawMessage(`{"sessionId":"` + sessionID + `"}`)
+	policyResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_p1",
+		Capability: "session.history.getPolicy",
+		Payload:    policyPayload,
+	})
+	if !policyResp.OK {
+		t.Fatalf("session.history.getPolicy failed: %v", policyResp.Error)
+	}
+	var policyBody map[string]interface{}
+	if err := json.Unmarshal(policyResp.Payload, &policyBody); err != nil {
+		t.Fatalf("unmarshal policy: %v", err)
+	}
+	hp, ok := policyBody["history"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected history object")
+	}
+	if hp["mode"] != "memory" {
+		t.Errorf("mode = %v, want memory", hp["mode"])
+	}
+
+	// Step 6: session.history.list
+	listResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_l1",
+		Capability: "session.history.list",
+	})
+	if !listResp.OK {
+		t.Fatalf("session.history.list failed: %v", listResp.Error)
+	}
+	var listBody map[string]interface{}
+	if err := json.Unmarshal(listResp.Payload, &listBody); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	sessions, ok := listBody["sessions"].([]interface{})
+	if !ok {
+		t.Fatalf("expected sessions array, got %T", listBody["sessions"])
+	}
+	if len(sessions) < 1 {
+		t.Errorf("expected at least 1 session, got %d", len(sessions))
+	}
+}
+
+func testServerWithHistory(t *testing.T) (*Server, *httptest.Server, *history.Store) {
+	t.Helper()
+
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	historyStore := history.New("")
+
+	// Wrap push/event callbacks to record into history (like production main.go)
+	wrappedPush := func(sid types.SessionID, streamType string, seq types.EventSeq, data string) {
+		historyStore.Record(sid, streamType, seq, data)
+		cr.PushChunk(sid, streamType, seq, data)
+	}
+	wrappedEvent := func(sid types.SessionID, seq types.EventSeq, eventType string, data interface{}) {
+		if eventType == "started" || eventType == "exited" {
+			historyStore.RecordEvent(sid, seq, "session."+eventType, data)
+		}
+		cr.PushSessionEvent(sid, seq, eventType, data)
+	}
+	pm := process.NewManager(wrappedPush, wrappedEvent)
+
+	execDeps := &executor.Deps{
+		Sessions:   sessStore,
+		Processes:  pm,
+		ConnRoutes: cr,
+		History:    historyStore,
+	}
+	execReg := executor.New(execDeps)
+
+	permChecker := permission.NewChecker(
+		&mockCapRegistry{},
+		&mockPolicyStore{},
+	)
+
+	audit := &mockAuditLogger{}
+	topo := &mockTopology{}
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(""),
+		&mockPluginRegistry{},
+		permChecker,
+		nil, /* planner */
+		execReg,
+		audit,
+		topo,
+		"node_local",
+	)
+
+	sv := New("", d, sessStore, cr, pm)
+	httpSrv := httptest.NewServer(sv.httpServer.Handler)
+	return sv, httpSrv, historyStore
+}
+
+func testServerWithRealPermission(t *testing.T, caps map[types.PluginID][]string, grantSelector func(pid types.PluginID, cap string) bool) (*Server, *httptest.Server) {
+	t.Helper()
+
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	pm := process.NewManager(cr.PushChunk, cr.PushSessionEvent)
+
+	execDeps := &executor.Deps{
+		Sessions:   sessStore,
+		Processes:  pm,
+		ConnRoutes: cr,
+	}
+	execReg := executor.New(execDeps)
+
+	// Real capability registry
+	reg := permission.NewMapRegistry(caps)
+
+	// Selective policy store: only grants caps that pass the selector
+	ps := permission.NewMemPolicyStore()
+	for pid, capList := range caps {
+		for _, c := range capList {
+			if grantSelector == nil || grantSelector(pid, c) {
+				ps.SetGrant(pid, c, &permission.PermissionGrant{Mode: "allow", GrantedBy: "test", GrantedAt: time.Now().UnixMilli()})
+			}
+		}
+	}
+
+	permChecker := permission.NewChecker(reg, ps)
+	audit := &mockAuditLogger{}
+	topo := &mockTopology{}
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(""),
+		&mockPluginRegistry{},
+		permChecker,
+		nil, /* planner */
+		execReg,
+		audit,
+		topo,
+		"node_local",
+	)
+
+	sv := New("", d, sessStore, cr, pm)
+	httpSrv := httptest.NewServer(sv.httpServer.Handler)
+	return sv, httpSrv
+}
+
+func TestWSAccessControl_AllowedCap(t *testing.T) {
+	// Only grant shell.system.info — test that it works
+	allowOnly := map[string]bool{"system.info": true}
+	_, srv := testServerWithRealPermission(t, permission.AllPluginsCaps, func(pid types.PluginID, cap string) bool {
+		return allowOnly[cap]
+	})
+	defer srv.Close()
+
+	conn := wsConnect(t, srv)
+	defer conn.Close()
+
+	resp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_allowed",
+		PluginID:   "sessionnode-core",
+		Capability: "system.info",
+	})
+	if !resp.OK {
+		t.Fatalf("expected OK for allowed cap, got: %v", resp.Error)
+	}
+}
+
+func TestWSAccessControl_UndeclaredCap(t *testing.T) {
+	_, srv := testServerWithRealPermission(t, permission.AllPluginsCaps, nil)
+	defer srv.Close()
+
+	conn := wsConnect(t, srv)
+	defer conn.Close()
+
+	resp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_undec",
+		Capability: "nonexistent.plugin.nope",
+	})
+	if resp.OK {
+		t.Fatal("expected failure for undeclared capability")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error message")
+	}
+	if resp.Error.Code != protocol.ErrCodePermissionDenied {
+		t.Errorf("code = %q, want %q", resp.Error.Code, protocol.ErrCodePermissionDenied)
+	}
+}
+
+func TestWSAccessControl_NotGrantedCap(t *testing.T) {
+	// Grant "system.info" only — "env.get" is declared in AllPluginsCaps but not granted
+	allowOnly := map[string]bool{"system.info": true}
+	_, srv := testServerWithRealPermission(t, permission.AllPluginsCaps, func(pid types.PluginID, cap string) bool {
+		return allowOnly[cap]
+	})
+	defer srv.Close()
+
+	conn := wsConnect(t, srv)
+	defer conn.Close()
+
+	resp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_ng",
+		Capability: "env.get",
+	})
+	if resp.OK {
+		t.Fatal("expected failure for not-granted capability")
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error message")
+	}
+}
+
+func TestWSAccessControl_DenyMode(t *testing.T) {
+	caps := map[types.PluginID][]string{"shell": {"system.info"}}
+	_, srv := testServerWithRealPermission(t, caps, func(pid types.PluginID, cap string) bool {
+		return false // grant nothing — manually add deny below
+	})
+	defer srv.Close()
+
+	// Re-create with explicit deny grant
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	pm := process.NewManager(cr.PushChunk, cr.PushSessionEvent)
+	execDeps := &executor.Deps{Sessions: sessStore, Processes: pm, ConnRoutes: cr}
+	execReg := executor.New(execDeps)
+
+	reg := permission.NewMapRegistry(caps)
+	ps := permission.NewMemPolicyStore()
+	ps.SetGrant("shell", "system.info", &permission.PermissionGrant{Mode: "deny", GrantedBy: "test"})
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(""),
+		&mockPluginRegistry{},
+		permission.NewChecker(reg, ps),
+		nil, /* planner */
+		execReg,
+		&mockAuditLogger{},
+		&mockTopology{},
+		"node_local",
+	)
+
+	sv := New("", d, sessStore, cr, pm)
+	httpSrv := httptest.NewServer(sv.httpServer.Handler)
+	defer httpSrv.Close()
+
+	conn := wsConnect(t, httpSrv)
+	defer conn.Close()
+
+	resp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_deny",
+		PluginID:   "shell",
+		Capability: "system.info",
+	})
+	if resp.OK {
+		t.Fatal("expected failure for denied capability")
 	}
 }
 

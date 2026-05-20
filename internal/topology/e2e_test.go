@@ -55,6 +55,7 @@ func testPeerNode(t *testing.T, id types.NodeID) (*server.Server, *httptest.Serv
 		auth.NewTokenAuthenticator(""),
 		&allowAnyPlugin{},
 		permChecker,
+		nil, /* planner */
 		execReg,
 		&silentAudit{},
 		peerTopo,
@@ -564,6 +565,7 @@ func TestPeerTopology_WSClientCreateOnPeer(t *testing.T) {
 		auth.NewTokenAuthenticator(""),
 		&allowAnyPlugin{},
 		permChecker,
+		nil, /* planner */
 		execReg,
 		&silentAudit{},
 		pt,
@@ -652,6 +654,7 @@ func TestPeerTopology_ListNodesViaWS(t *testing.T) {
 		auth.NewTokenAuthenticator(""),
 		&allowAnyPlugin{},
 		permChecker,
+		nil, /* planner */
 		execReg,
 		&silentAudit{},
 		pt,
@@ -735,6 +738,7 @@ func TestPeerTopology_ActorTypeNodeBypass(t *testing.T) {
 		auth.NewTokenAuthenticator("secret-token"),
 		&allowAnyPlugin{},
 		permChecker,
+		nil, /* planner */
 		execReg,
 		&silentAudit{},
 		peerTopo,
@@ -863,6 +867,7 @@ func newDispatcherForTopology(t *testing.T, pt *PeerTopology, localID types.Node
 		auth.NewTokenAuthenticator(""),
 		&allowAnyPlugin{},
 		permission.NewChecker(&permitAllCaps{}, &permitAllPolicy{}),
+		nil, /* planner */
 		execReg,
 		&silentAudit{},
 		pt,

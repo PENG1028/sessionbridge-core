@@ -30,11 +30,16 @@ func (s *Store) nextID() types.SessionID {
 
 // Create adds a new session to the store and returns its ID.
 func (s *Store) Create(pluginID types.PluginID, command, cwd string, createdAt int64) types.SessionID {
+	return s.CreateWithPolicy(pluginID, command, cwd, createdAt, types.DefaultHistoryPolicy())
+}
+
+// CreateWithPolicy adds a new session with the given history policy.
+func (s *Store) CreateWithPolicy(pluginID types.PluginID, command, cwd string, createdAt int64, hp types.HistoryPolicy) types.SessionID {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := s.nextID()
-	sess := NewSession(id, pluginID, command, cwd, createdAt)
+	sess := NewSessionWithPolicy(id, pluginID, command, cwd, createdAt, hp)
 	s.sessions[id] = sess
 	return id
 }
@@ -69,4 +74,11 @@ func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.sessions)
+}
+
+// Cleanup removes all sessions from the store.
+func (s *Store) Cleanup() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = make(map[types.SessionID]*Session)
 }

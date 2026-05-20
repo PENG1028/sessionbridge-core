@@ -121,6 +121,9 @@ func (s *Server) shutdown() {
 	log.Println("[server] cleaning up processes...")
 	s.procManager.Cleanup()
 
+	log.Println("[server] cleaning up sessions...")
+	s.sessions.Cleanup()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

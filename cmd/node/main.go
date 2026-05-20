@@ -11,9 +11,11 @@ import (
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/dispatcher"
 	"github.com/user/sessionnode/go-core/internal/executor"
+	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/logs"
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/permission"
+	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/server"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -63,6 +65,21 @@ func main() {
 	// Process manager (real OS process execution with output push)
 	procManager := process.NewManager(connRegistry.PushChunk, connRegistry.PushSessionEvent)
 
+	// History store — session retention and replay
+	historyStore := history.New("")
+	defer historyStore.Cleanup()
+	wrappedPush := func(sid types.SessionID, streamType string, seq types.EventSeq, data string) {
+		historyStore.Record(sid, streamType, seq, data)
+		connRegistry.PushChunk(sid, streamType, seq, data)
+	}
+	wrappedEvent := func(sid types.SessionID, seq types.EventSeq, eventType string, data interface{}) {
+		if eventType == "started" || eventType == "exited" {
+			historyStore.RecordEvent(sid, seq, "session."+eventType, data)
+		}
+		connRegistry.PushSessionEvent(sid, seq, eventType, data)
+	}
+	procManager = process.NewManager(wrappedPush, wrappedEvent)
+
 	// Notifier — broadcasts notifications/approvals to all WebSocket clients
 	notifyMgr := notify.NewManager(connRegistry.Broadcast)
 
@@ -89,13 +106,14 @@ func main() {
 		Notifier:   notifyMgr,
 		Config:     cfgMgr,
 		Nodes:      topo,
+		History:    historyStore,
 	}
 	execReg := executor.New(execDeps)
 
-	// Permission checker — permissive by default
+	// Permission checker — capability registry + allow-all policy v0
 	permChecker := permission.NewChecker(
-		&permissiveCapRegistry{},
-		&permissivePolicyStore{},
+		permission.NewMapRegistry(permission.AllPluginsCaps),
+		permission.NewAllowAllPolicy(permission.AllPluginsCaps),
 	)
 
 	// Authenticator
@@ -116,6 +134,7 @@ func main() {
 		authenticator,
 		pluginReg,
 		permChecker,
+		plan.NewManager(plan.NewPlanStore(), plan.DefaultHighRiskCaps), /* planner */
 		execReg,
 		audit,
 		topo,
@@ -137,7 +156,10 @@ func main() {
 	fmt.Printf("  Logs:    %s\n", filepath.Join(logDir, "logs"))
 	fmt.Printf("  Token:   %s\n", map[bool]string{true: "enabled", false: "disabled (dev mode)"}[token != ""])
 
-	log.Fatal(sv.Start())
+	if err := sv.Start(); err != nil {
+		log.Fatalf("server error: %v", err)
+	}
+	log.Println("[startup] server stopped cleanly")
 }
 
 func getEnv(key, fallback string) string {
@@ -159,18 +181,6 @@ func (r *simplePluginRegistry) Get(id types.PluginID) (*dispatcher.PluginEntry, 
 		return nil, fmt.Errorf("plugin not found: %s", id)
 	}
 	return p, nil
-}
-
-type permissiveCapRegistry struct{}
-
-func (p *permissiveCapRegistry) HasCapability(pluginID types.PluginID, capability string) bool {
-	return true
-}
-
-type permissivePolicyStore struct{}
-
-func (p *permissivePolicyStore) GetGrant(pluginID types.PluginID, capability string) (*permission.PermissionGrant, error) {
-	return &permission.PermissionGrant{Mode: "allow"}, nil
 }
 
 // dispatchAuditBridge converts dispatcher.AuditLogger calls to structured

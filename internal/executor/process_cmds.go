@@ -37,6 +37,14 @@ func processSpawn(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 		return nil, fmt.Errorf("spawn failed: %w", err)
 	}
 
+	// Initialize history for spawned process output
+	if deps.History != nil {
+		hp := types.DefaultHistoryPolicy()
+		if err := deps.History.InitSession(sid, hp); err != nil {
+			return nil, fmt.Errorf("history init: %w", err)
+		}
+	}
+
 	return map[string]interface{}{
 		"sessionId": string(sid),
 		"command":   p.Command,

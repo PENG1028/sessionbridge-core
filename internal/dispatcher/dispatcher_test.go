@@ -43,6 +43,23 @@ func (m *mockPermissionChecker) Check(req *types.CapabilityRequest) error {
 	return m.err
 }
 
+type mockPlanner struct {
+	requiresPlan bool
+	planID       string
+	err          error
+}
+
+func (m *mockPlanner) RequiresPlan(capability string) bool {
+	return m.requiresPlan
+}
+
+func (m *mockPlanner) CreatePlan(req *types.CapabilityRequest) (string, error) {
+	if m.err != nil {
+		return "", m.err
+	}
+	return m.planID, nil
+}
+
 type mockExecutor struct {
 	result interface{}
 	err    error
@@ -87,6 +104,15 @@ func (m *mockAuditLogger) LastAllowed() *bool {
 	return &m.entries[len(m.entries)-1].allowed
 }
 
+func (m *mockAuditLogger) LastDetail() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.entries) == 0 {
+		return ""
+	}
+	return m.entries[len(m.entries)-1].detail
+}
+
 type mockTopology struct {
 	target *NodeTarget
 	err    error
@@ -108,6 +134,8 @@ func makePayload() types.CapabilityRequest {
 		TargetNodeID: "",
 	}
 }
+
+// --- Tests ---
 
 func TestDispatch_Success(t *testing.T) {
 	audit := &mockAuditLogger{}
@@ -136,6 +164,7 @@ func TestDispatch_AuthenticateError(t *testing.T) {
 		&mockAuthenticator{err: errors.New("invalid token")},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{},
@@ -165,6 +194,7 @@ func TestDispatch_PluginNotFound(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{err: errors.New("plugin not found")},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{},
@@ -188,6 +218,7 @@ func TestDispatch_PluginDisabled(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: false}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{},
@@ -211,6 +242,7 @@ func TestDispatch_PermissionDenied(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{err: errors.New("permission denied")},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{},
@@ -235,6 +267,7 @@ func TestDispatch_RemoteNodeForward(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{
@@ -267,6 +300,7 @@ func TestDispatch_RemoteNodeNotFound(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{err: errors.New("node not found")},
@@ -291,6 +325,7 @@ func TestDispatch_RemoteForwardError(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
 		&mockTopology{
@@ -322,6 +357,7 @@ func TestDispatch_ExecuteError(t *testing.T) {
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{err: errors.New("execution failed")},
 		audit,
 		&mockTopology{},
@@ -360,6 +396,7 @@ func TestDispatch_AuditCalledOnFailure(t *testing.T) {
 		&mockAuthenticator{err: errors.New("no auth")},
 		&mockPluginRegistry{},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{},
 		&mockAuditLogger{},
 		&mockTopology{},
@@ -378,7 +415,7 @@ func TestDispatch_LocalNodeWhenTargetEqualsLocal(t *testing.T) {
 	d := createSuccessDispatcher(audit, "node_local")
 
 	req := makePayload()
-	req.TargetNodeID = "node_local" // explicit local targeting
+	req.TargetNodeID = "node_local"
 	resp := d.Dispatch(&req)
 
 	if !resp.OK {
@@ -389,6 +426,139 @@ func TestDispatch_LocalNodeWhenTargetEqualsLocal(t *testing.T) {
 	}
 }
 
+// --- Plan Before Apply tests ---
+
+func TestDispatch_PlanRequired_CreatesPlan(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planID: "plan_001"},
+		&mockExecutor{result: "ok"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "plugin.install"
+	resp := d.Dispatch(&req)
+
+	if resp.OK {
+		t.Fatal("expected plan-pending response, not OK")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodePlanRequired {
+		t.Errorf("expected code %s, got %v", protocol.ErrCodePlanRequired, resp.Error)
+	}
+	if resp.PlanID != "plan_001" {
+		t.Errorf("PlanID = %q, want %q", resp.PlanID, "plan_001")
+	}
+	if resp.PlanState != "pending" {
+		t.Errorf("PlanState = %q, want %q", resp.PlanState, "pending")
+	}
+	// Audit should record plan creation
+	if detail := audit.LastDetail(); detail != "plan created: plan_001" {
+		t.Errorf("audit detail = %q, want %q", detail, "plan created: plan_001")
+	}
+}
+
+func TestDispatch_PlanNotRequired_PassesThrough(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: false},
+		&mockExecutor{result: "executed"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	resp := d.Dispatch(&req)
+
+	if !resp.OK {
+		t.Fatalf("expected OK, got error: %v", resp.Error)
+	}
+	if resp.Payload != "executed" {
+		t.Errorf("Payload = %v, want %q", resp.Payload, "executed")
+	}
+}
+
+func TestDispatch_PlanWithPlanID_SkipsPlanCheck(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, planID: "plan_001"},
+		&mockExecutor{result: "approved-execution"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "plugin.install"
+	req.PlanID = "plan_001" // pre-approved plan
+	resp := d.Dispatch(&req)
+
+	if !resp.OK {
+		t.Fatalf("expected OK with approved plan, got error: %v", resp.Error)
+	}
+	if resp.Payload != "approved-execution" {
+		t.Errorf("Payload = %v, want %q", resp.Payload, "approved-execution")
+	}
+}
+
+func TestDispatch_PlanNilPlanner_SkipsPlanCheck(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		nil, /* no planner configured */
+		&mockExecutor{result: "direct"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	resp := d.Dispatch(&req)
+
+	if !resp.OK {
+		t.Fatalf("expected OK when no planner, got error: %v", resp.Error)
+	}
+}
+
+func TestDispatch_PlanCreationFailure(t *testing.T) {
+	audit := &mockAuditLogger{}
+	d := New(
+		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
+		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
+		&mockPermissionChecker{},
+		&mockPlanner{requiresPlan: true, err: errors.New("store full")},
+		&mockExecutor{result: "ok"},
+		audit,
+		&mockTopology{},
+		"node_local",
+	)
+
+	req := makePayload()
+	req.Capability = "plugin.install"
+	resp := d.Dispatch(&req)
+
+	if resp.OK {
+		t.Fatal("expected failure on plan creation error")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodePlanFailed {
+		t.Errorf("expected code %s, got %v", protocol.ErrCodePlanFailed, resp.Error)
+	}
+}
+
 // --- Helpers ---
 
 func createSuccessDispatcher(audit *mockAuditLogger, localNodeID types.NodeID) *Dispatcher {
@@ -396,6 +566,7 @@ func createSuccessDispatcher(audit *mockAuditLogger, localNodeID types.NodeID) *
 		&mockAuthenticator{actor: &types.Actor{Type: "web", ID: "browser_abc"}},
 		&mockPluginRegistry{plugin: &PluginEntry{ID: "test-plugin", Enabled: true}},
 		&mockPermissionChecker{},
+		nil, /* no planner */
 		&mockExecutor{result: map[string]interface{}{"status": "ok"}},
 		audit,
 		&mockTopology{},

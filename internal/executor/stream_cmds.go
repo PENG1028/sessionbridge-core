@@ -74,6 +74,12 @@ func streamWrite(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 		return nil, fmt.Errorf("unknown stream type: %s", p.Stream)
 	}
 	stream.Write([]byte(p.Data))
+
+	// Record into history for replay
+	if deps.History != nil {
+		deps.History.Record(types.SessionID(p.SessionID), p.Stream, 0, p.Data)
+	}
+
 	return map[string]interface{}{
 		"sessionId": p.SessionID,
 		"stream":    p.Stream,

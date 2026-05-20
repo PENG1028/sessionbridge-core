@@ -15,4 +15,6 @@ const (
 	ErrCodeExecutionError    = "EXECUTION_ERROR"
 	ErrCodeInvalidRequest    = "INVALID_REQUEST"
 	ErrCodeInternalError     = "INTERNAL_ERROR"
+	ErrCodePlanRequired      = "PLAN_REQUIRED"
+	ErrCodePlanFailed        = "PLAN_FAILED"
 )

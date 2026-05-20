@@ -27,6 +27,16 @@ type Executor interface {
 	Execute(req *types.CapabilityRequest) (interface{}, error)
 }
 
+// Planner handles "Plan Before Apply" for high-risk capabilities.
+// When Check returns a non-nil plan ID, the capability must go through
+// plan creation → approval → execution rather than executing directly.
+type Planner interface {
+	// RequiresPlan returns true if the capability needs a plan before execution.
+	RequiresPlan(capability string) bool
+	// CreatePlan creates a pending plan for the request. Returns the plan ID.
+	CreatePlan(req *types.CapabilityRequest) (string, error)
+}
+
 // AuditLogger records capability calls for the audit trail.
 type AuditLogger interface {
 	Log(req *types.CapabilityRequest, allowed bool, detail string)
@@ -55,11 +65,12 @@ type NodeTarget struct {
 
 // Dispatcher implements the 8-step capability dispatch chain:
 // authenticate → resolve plugin → check enabled → check permission →
-// route to target → execute → audit → return.
+// plan check → route to target → execute → audit → return.
 type Dispatcher struct {
 	auth        Authenticator
 	plugins     PluginRegistry
 	permissions PermissionChecker
+	planner     Planner
 	executor    Executor
 	audit       AuditLogger
 	topology    Topology
@@ -67,10 +78,12 @@ type Dispatcher struct {
 }
 
 // New creates a Dispatcher with the given component implementations.
+// planner may be nil if Plan Before Apply is not configured.
 func New(
 	auth Authenticator,
 	plugins PluginRegistry,
 	permissions PermissionChecker,
+	planner Planner,
 	executor Executor,
 	audit AuditLogger,
 	topology Topology,
@@ -80,6 +93,7 @@ func New(
 		auth:        auth,
 		plugins:     plugins,
 		permissions: permissions,
+		planner:     planner,
 		executor:    executor,
 		audit:       audit,
 		topology:    topology,
@@ -114,6 +128,23 @@ func (d *Dispatcher) Dispatch(req *types.CapabilityRequest) *types.CapabilityRes
 	if err := d.permissions.Check(req); err != nil {
 		d.audit.Log(req, false, err.Error())
 		return errorResponse(req, protocol.ErrCodePermissionDenied, err.Error())
+	}
+
+	// Step 4.5: Plan Before Apply for high-risk capabilities.
+	if d.planner != nil && d.planner.RequiresPlan(req.Capability) && req.PlanID == "" {
+		planID, err := d.planner.CreatePlan(req)
+		if err != nil {
+			d.audit.Log(req, false, "plan creation failed: "+err.Error())
+			return errorResponse(req, protocol.ErrCodePlanFailed, err.Error())
+		}
+		d.audit.Log(req, true, "plan created: "+planID)
+		return &types.CapabilityResponse{
+			RequestID: req.RequestID,
+			OK:        false,
+			Error:     &types.CoreError{Code: protocol.ErrCodePlanRequired, Message: "plan required — approve via plan.approve"},
+			PlanID:    planID,
+			PlanState: "pending",
+		}
 	}
 
 	// Step 5: Route to target node

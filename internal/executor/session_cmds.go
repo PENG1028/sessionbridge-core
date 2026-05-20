@@ -8,9 +8,37 @@ import (
 )
 
 type sessionCreatePayload struct {
-	Command string `json:"command"`
-	Cwd     string `json:"cwd"`
-	Plugin  string `json:"pluginId"`
+	Command string             `json:"command"`
+	Cwd     string             `json:"cwd"`
+	Plugin  string             `json:"pluginId"`
+	History *types.HistoryPolicy `json:"history,omitempty"`
+}
+
+func effectiveHistoryPolicy(requested *types.HistoryPolicy) types.HistoryPolicy {
+	if requested == nil {
+		return types.DefaultHistoryPolicy()
+	}
+	// Start with requested, merge with safe defaults for unset fields
+	hp := *requested
+	if hp.MaxBytes <= 0 {
+		hp.MaxBytes = 100 * 1024 * 1024
+	}
+	if hp.MaxAge == "" {
+		hp.MaxAge = "24h"
+	}
+	if len(hp.Streams) == 0 {
+		hp.Streams = []string{"stdout", "stderr"}
+	}
+	if hp.Mode == "" {
+		hp.Mode = types.HistoryModeMemory
+	}
+	if hp.Redaction == "" {
+		hp.Redaction = types.HistoryRedactionNone
+	}
+	if hp.Visibility == "" {
+		hp.Visibility = types.HistoryVisAuthorized
+	}
+	return hp
 }
 
 func sessionCreate(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
@@ -22,15 +50,26 @@ func sessionCreate(req *types.CapabilityRequest, deps *Deps) (interface{}, error
 		p.Plugin = string(req.PluginID)
 	}
 
-	id := deps.Sessions.Create(
+	hp := effectiveHistoryPolicy(p.History)
+	id := deps.Sessions.CreateWithPolicy(
 		types.PluginID(p.Plugin),
 		p.Command,
 		p.Cwd,
 		time.Now().UnixMilli(),
+		hp,
 	)
+
+	// Initialize history store
+	if deps.History != nil {
+		if err := deps.History.InitSession(id, hp); err != nil {
+			return nil, fmt.Errorf("history init: %w", err)
+		}
+	}
+
 	return map[string]interface{}{
 		"sessionId": string(id),
 		"state":     "created",
+		"history":   hp,
 	}, nil
 }
 
@@ -51,7 +90,7 @@ func sessionDestroy(req *types.CapabilityRequest, deps *Deps) (interface{}, erro
 		return nil, fmt.Errorf("session not found: %s", p.SessionID)
 	}
 	deps.Sessions.Destroy(types.SessionID(p.SessionID))
-	return map[string]string{"status": "destroyed"}, nil
+	return map[string]interface{}{"status": "destroyed"}, nil
 }
 
 func sessionList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
