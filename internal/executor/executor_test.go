@@ -18,6 +18,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
+	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/task"
 	"github.com/user/sessionnode/go-core/internal/testutil"
@@ -76,6 +77,7 @@ func testDeps(t *testing.T) *Deps {
 		ConnRoutes: cr,
 		Nodes:      &mockNodeLister{},
 		TaskStore:  task.NewStore(),
+		RunStore:   run.NewStore(),
 	}
 }
 
@@ -2688,5 +2690,341 @@ func TestAskGrant_RequiresApproval(t *testing.T) {
 	// Should return a planId for the ask mode
 	if m["planId"] == nil || m["planId"] == "" {
 		t.Error("expected non-empty planId for ask mode")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// run.*
+// ---------------------------------------------------------------------------
+
+func TestRunCreate(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"label":   "test-run",
+	})
+	if m["runId"] == nil || m["runId"] == "" {
+		t.Error("missing runId")
+	}
+	if m["sessionId"] == nil || m["sessionId"] == "" {
+		t.Error("missing sessionId")
+	}
+	if m["processId"] == nil || m["processId"] == "" {
+		t.Error("missing processId")
+	}
+	if m["state"] != "running" {
+		t.Errorf("state = %v, want running", m["state"])
+	}
+	policy, ok := m["policy"].(map[string]interface{})
+	if !ok {
+		t.Fatal("policy is missing or wrong type")
+	}
+	if policy["onDisconnect"] != "keep_running" {
+		t.Errorf("onDisconnect = %v, want keep_running", policy["onDisconnect"])
+	}
+}
+
+func TestRunCreate_DefaultKind(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	// run.info to verify kind defaulted to "terminal"
+	runID := m["runId"].(string)
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	if info["kind"] != "terminal" {
+		t.Errorf("kind = %v, want terminal", info["kind"])
+	}
+}
+
+func TestRunCreate_EmptyCommand(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("run.create", map[string]string{}))
+	if err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}
+
+func TestRunCreate_InvalidPolicy(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"policy": map[string]interface{}{
+			"restartRestore": true,
+		},
+	}))
+	if err == nil {
+		t.Fatal("expected error for invalid policy")
+	}
+	if !strings.Contains(err.Error(), "invalid policy") {
+		t.Errorf("error = %v, want 'invalid policy'", err)
+	}
+}
+
+func TestRunCreate_UnsupportedOnCoreShutdown(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"policy": map[string]interface{}{
+			"onCoreShutdown": "restart",
+		},
+	}))
+	if err == nil {
+		t.Fatal("expected error for unsupported onCoreShutdown")
+	}
+}
+
+func TestRunCreate_Metadata(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"metadata": map[string]string{
+			"project": "test-project",
+			"env":     "dev",
+		},
+	})
+	runID := m["runId"].(string)
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	meta, ok := info["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatal("metadata is missing or wrong type")
+	}
+	if meta["project"] != "test-project" {
+		t.Errorf("metadata.project = %v, want test-project", meta["project"])
+	}
+	if meta["env"] != "dev" {
+		t.Errorf("metadata.env = %v, want dev", meta["env"])
+	}
+}
+
+func TestRunList(t *testing.T) {
+	r := New(testDeps(t))
+	execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go", "args": []string{"version"}, "label": "run-a",
+	})
+	execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go", "args": []string{"env"}, "label": "run-b",
+	})
+
+	m := execOK(t, r, "run.list", nil)
+	runs := m["runs"].([]interface{})
+	if len(runs) != 2 {
+		t.Errorf("expected 2 runs, got %d", len(runs))
+	}
+}
+
+func TestRunList_FilterByKind(t *testing.T) {
+	r := New(testDeps(t))
+	execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go", "args": []string{"version"}, "kind": "service",
+	})
+	execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go", "args": []string{"env"}, "kind": "terminal",
+	})
+
+	m := execOK(t, r, "run.list", map[string]string{"kind": "service"})
+	runs := m["runs"].([]interface{})
+	if len(runs) != 1 {
+		t.Errorf("expected 1 service run, got %d", len(runs))
+	}
+}
+
+func TestRunInfo(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"label":   "info-test",
+		"kind":    "service",
+	})
+	runID := m["runId"].(string)
+
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	if info["runId"] != runID {
+		t.Errorf("runId = %v, want %s", info["runId"], runID)
+	}
+	if info["kind"] != "service" {
+		t.Errorf("kind = %v, want service", info["kind"])
+	}
+	if info["label"] != "info-test" {
+		t.Errorf("label = %v, want info-test", info["label"])
+	}
+	if info["state"] != "running" {
+		t.Errorf("state = %v, want running", info["state"])
+	}
+	if info["sessionId"] == nil || info["sessionId"] == "" {
+		t.Error("missing sessionId")
+	}
+}
+
+func TestRunInfo_NotFound(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("run.info", map[string]string{"runId": "nonexistent"}))
+	if err == nil {
+		t.Fatal("expected error for nonexistent run")
+	}
+}
+
+func TestRunStop(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	runID := m["runId"].(string)
+
+	stop := execOK(t, r, "run.stop", map[string]string{"runId": runID, "signal": "SIGTERM"})
+	if stop["state"] != "stopped" {
+		t.Errorf("state = %v, want stopped", stop["state"])
+	}
+
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	if info["state"] != "stopped" {
+		t.Errorf("state = %v, want stopped", info["state"])
+	}
+}
+
+func TestRunStop_NotFound(t *testing.T) {
+	r := New(testDeps(t))
+	_, err := r.Execute(req("run.stop", map[string]string{"runId": "nonexistent"}))
+	if err == nil {
+		t.Fatal("expected error for nonexistent run")
+	}
+}
+
+func TestRunUpdatePolicy(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	runID := m["runId"].(string)
+
+	updated := execOK(t, r, "run.updatePolicy", map[string]interface{}{
+		"runId": runID,
+		"policy": map[string]interface{}{
+			"onDisconnect":   "keep_running",
+			"onCoreShutdown": "terminate",
+			"persistHistory": true,
+		},
+	})
+	policy, ok := updated["policy"].(map[string]interface{})
+	if !ok {
+		t.Fatal("policy missing or wrong type")
+	}
+	if policy["persistHistory"] != true {
+		t.Errorf("persistHistory = %v, want true", policy["persistHistory"])
+	}
+}
+
+func TestRunUpdatePolicy_RejectsRestartRestore(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	runID := m["runId"].(string)
+
+	_, err := r.Execute(req("run.updatePolicy", map[string]interface{}{
+		"runId": runID,
+		"policy": map[string]interface{}{
+			"restartRestore": true,
+		},
+	}))
+	if err == nil {
+		t.Fatal("expected error for restartRestore=true")
+	}
+}
+
+func TestRunIntegration_ProcessSpawnStillWorks(t *testing.T) {
+	// Run.create must not break process.spawn.
+	r := New(testDeps(t))
+	m := execOK(t, r, "process.spawn", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	if m["sessionId"] == nil || m["sessionId"] == "" {
+		t.Error("process.spawn: missing sessionId")
+	}
+	if m["state"] != "running" {
+		t.Errorf("process.spawn state = %v, want running", m["state"])
+	}
+}
+
+func TestRunIntegration_StreamWriteToRunProcess(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+	catBin := testutil.CatBinary(t)
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": catBin,
+		"label":   "stream-test",
+	})
+	sid := m["sessionId"].(string)
+	time.Sleep(100 * time.Millisecond)
+
+	wm := execOK(t, r, "stream.write", map[string]string{
+		"sessionId": sid,
+		"stream":    "stdin",
+		"data":      "hello run\n",
+	})
+	if wm["written"].(float64) == 0 {
+		t.Error("expected >0 bytes written to run process stdin")
+	}
+
+	// Close stdin so the process can exit
+	deps.Processes.CloseStdin(types.SessionID(sid))
+}
+
+func TestRunIntegration_DisconnectDoesNotKillRunProcess(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+	sleepBin := testutil.SleepBinary(t)
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"5"},
+		"label":   "disconnect-test",
+	})
+	sid := types.SessionID(m["sessionId"].(string))
+	runID := m["runId"].(string)
+
+	// Verify process exists
+	proc := deps.Processes.Get(sid)
+	if proc == nil {
+		t.Fatal("process not found after run.create")
+	}
+	if proc.State != "running" {
+		t.Errorf("process state = %v, want running", proc.State)
+	}
+
+	// Run should still be running
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	if info["state"] != "running" {
+		t.Errorf("run state = %v, want running", info["state"])
+	}
+
+	// Cleanup
+	deps.Processes.Signal(sid, "SIGKILL", false)
+}
+
+func TestRegisteredRunCapabilitiesInHandlers(t *testing.T) {
+	r := New(testDeps(t))
+	capabilities := []string{
+		"run.create",
+		"run.list",
+		"run.info",
+		"run.stop",
+		"run.updatePolicy",
+	}
+	for _, cap := range capabilities {
+		_, ok := r.handlers[cap]
+		if !ok {
+			t.Errorf("run capability %q not registered in handlers", cap)
+		}
 	}
 }

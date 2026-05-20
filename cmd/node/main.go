@@ -19,6 +19,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
+	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/server"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/topology"
@@ -157,6 +158,9 @@ func main() {
 	// Plugin registry for the dispatcher — built from manifest discovery + core.
 	dispPlugins := newDispPluginRegistry(manifestReg)
 
+	// Run store — long-lived resource index
+	runStore := run.NewStore()
+
 	// Executor registry
 	execDeps := &executor.Deps{
 		Sessions:   sessStore,
@@ -167,6 +171,7 @@ func main() {
 		Nodes:      topo,
 		History:    historyStore,
 		Manifests:  manifestReg,
+		RunStore:   runStore,
 	}
 	execReg := executor.New(execDeps)
 

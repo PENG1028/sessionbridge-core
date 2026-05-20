@@ -116,6 +116,13 @@ var KnownCapabilities = map[string]bool{
 	"session.history.list":            true,
 	"session.history.clear.plan":      true,
 	"session.history.clear.execute":   true,
+
+	// Run
+	"run.create":      true,
+	"run.list":        true,
+	"run.info":        true,
+	"run.stop":        true,
+	"run.updatePolicy": true,
 }
 
 // DangerousCapabilities are capabilities that must NOT have default: allow

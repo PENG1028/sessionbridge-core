@@ -11,6 +11,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
+	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/task"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
@@ -56,6 +57,9 @@ type Deps struct {
 	// PlanManager handles approval plan lifecycle (approve, deny) for high-risk operations.
 	// When nil, plan-linked approval is skipped (graceful degradation).
 	PlanManager *plan.Manager
+	// RunStore indexes long-lived execution resources (terminal sessions, processes, etc.).
+	// When nil, run capabilities degrade gracefully (empty list / not-found error).
+	RunStore *run.Store
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -190,4 +194,10 @@ func (r *Registry) registerDefaults() {
 
 	r.Register("task.list", taskList)
 	r.Register("task.info", taskInfo)
+
+	r.Register("run.create", runCreate)
+	r.Register("run.list", runList)
+	r.Register("run.info", runInfo)
+	r.Register("run.stop", runStop)
+	r.Register("run.updatePolicy", runUpdatePolicy)
 }

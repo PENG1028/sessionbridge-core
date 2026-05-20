@@ -3,7 +3,6 @@ package executor
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -24,47 +23,26 @@ func processSpawn(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 	if err := decodePayload(req.Payload, &p); err != nil {
 		return nil, fmt.Errorf("invalid payload: %w", err)
 	}
-	if p.Command == "" {
-		return nil, fmt.Errorf("command is required")
+
+	sid, err := spawnManagedProcess(spawnRequest{
+		Command:         p.Command,
+		Args:            p.Args,
+		Cwd:             p.Cwd,
+		Plugin:          p.Plugin,
+		Pty:             p.Pty,
+		Cols:            p.Cols,
+		Rows:            p.Rows,
+		Kind:            p.Kind,
+		ParentSessionID: p.ParentSessionID,
+	}, req, deps)
+	if err != nil {
+		return nil, err
 	}
 
-	// Determine effective plugin ID: payload overrides request-level.
+	// Determine effective plugin ID for response
 	pluginID := req.PluginID
 	if p.Plugin != "" {
 		pluginID = types.PluginID(p.Plugin)
-	}
-
-	cfg := &process.SpawnConfig{
-		PluginID: pluginID,
-		Kind:     p.Kind,
-	}
-	if p.ParentSessionID != "" {
-		cfg.ParentSessionID = types.SessionID(p.ParentSessionID)
-	}
-
-	var sid types.SessionID
-	var err error
-
-	if p.Pty {
-		sid, err = deps.Processes.SpawnPTY(p.Command, p.Args, p.Cwd, p.Cols, p.Rows, cfg)
-	} else {
-		sid, err = deps.Processes.Spawn(p.Command, p.Args, p.Cwd, cfg)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("spawn failed: %w", err)
-	}
-
-	// Auto-subscribe the spawning connection to process output streams.
-	if req.ConnID != "" && deps.ConnRoutes != nil {
-		deps.ConnRoutes.Subscribe(req.ConnID, sid, []string{"stdout", "stderr"}, req.PluginID, req.Actor, 0)
-	}
-
-	// Initialize history for spawned process output.
-	if deps.History != nil {
-		hp := types.DefaultHistoryPolicy()
-		if err := deps.History.InitSession(sid, hp); err != nil {
-			return nil, fmt.Errorf("history init: %w", err)
-		}
 	}
 
 	return map[string]interface{}{

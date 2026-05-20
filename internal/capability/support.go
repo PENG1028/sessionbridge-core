@@ -104,6 +104,13 @@ var Matrix = map[string]map[string]platformRule{
 	"plugin.cache.clear":      desktopFull,
 	"plugin.history":          desktopFull,
 
+	// ── run family ──
+	"run.create":      desktopFull,
+	"run.list":        desktopFull,
+	"run.info":        desktopFull,
+	"run.stop":        desktopFull,
+	"run.updatePolicy": desktopFull,
+
 	// ── system family ──
 	"system.info": desktopFull,
 	"node.info":   desktopFull,
