@@ -521,11 +521,19 @@ func TestSetup_CreatesCoreAndAudit(t *testing.T) {
 }
 
 func TestSetup_InvalidDir(t *testing.T) {
-	// Passing an empty string for dataDir should work (creates /logs in CWD)
-	// but let's avoid polluting. Instead pass a path with a null byte to force error.
-	_, _, err := Setup("\x00invalid", LevelDebug)
+	// Create a temp file and use it as dataDir — since dataDir must be a
+	// directory (MkdirAll creates logs/ inside it), a regular file path
+	// reliably triggers an error on every OS.
+	f, err := os.CreateTemp("", "logtest-not-a-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	_, _, err = Setup(f.Name(), LevelDebug)
 	if err == nil {
-		t.Skip("platform may not reject null-byte paths; skipping")
+		t.Fatal("expected error when dataDir is a file, not a directory")
 	}
 }
 

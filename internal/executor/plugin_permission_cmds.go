@@ -3,7 +3,6 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/pkg/types"
@@ -122,17 +121,6 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 		"capability": payload.Capability,
 		"mode":       payload.Mode,
 	}, nil
-}
-
-// isHighRiskCapability returns true if the capability string involves high-risk operations.
-func isHighRiskCapability(capability string) bool {
-	terms := []string{"grant", "revoke", "delete", "clear", "execute", "install", "uninstall"}
-	for _, t := range terms {
-		if strings.Contains(capability, t) {
-			return true
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------

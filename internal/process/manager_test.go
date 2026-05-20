@@ -2,7 +2,7 @@ package process
 
 import (
 	"os"
-	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,7 +122,7 @@ func TestWriteStdin(t *testing.T) {
 	catBin := testutil.CatBinary(t)
 	sid, err := m.Spawn(catBin, nil, "", nil)
 	if err != nil {
-		t.Skipf("cat not available: %v", err)
+		t.Fatalf("Spawn cat: %v", err)
 	}
 
 	if err := m.WriteStdin(sid, "test input\n"); err != nil {
@@ -143,7 +143,7 @@ func TestSignal_Kill(t *testing.T) {
 	sleepBin := testutil.SleepBinary(t)
 	sid, err := m.Spawn(sleepBin, []string{"60"}, "", nil)
 	if err != nil {
-		t.Skipf("sleep not available: %v", err)
+		t.Fatalf("Spawn sleep: %v", err)
 	}
 
 	time.Sleep(100 * time.Millisecond)
@@ -210,7 +210,7 @@ func TestCloseStdin(t *testing.T) {
 	catBin := testutil.CatBinary(t)
 	sid, err := m.Spawn(catBin, nil, "", nil)
 	if err != nil {
-		t.Skipf("cat not available: %v", err)
+		t.Fatalf("Spawn cat: %v", err)
 	}
 
 	if err := m.CloseStdin(sid); err != nil {
@@ -267,7 +267,7 @@ func TestReadStream_RawBytes(t *testing.T) {
 	echoBin := testutil.EchoBinary(t)
 	_, err := m.Spawn(echoBin, []string{"partial_line"}, "", nil)
 	if err != nil {
-		t.Skipf("echo not available: %v", err)
+		t.Fatalf("Spawn echo: %v", err)
 	}
 
 	time.Sleep(1 * time.Second)
@@ -288,11 +288,12 @@ func TestReadStream_RawBytes(t *testing.T) {
 func TestSpawnPTY_OnWindows(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)
+	defer m.Cleanup()
 
 	echoBin := testutil.EchoBinary(t)
 	_, err := m.SpawnPTY(echoBin, []string{"test"}, "", 80, 40, nil)
-	if err == nil {
-		t.Skip("PTY is supported on this platform")
+	if err != nil {
+		t.Fatalf("SpawnPTY failed: %v", err)
 	}
 }
 
@@ -308,8 +309,16 @@ func TestResize_NoPTY(t *testing.T) {
 	}
 
 	err = m.Resize(sid, 80, 40)
-	if err == nil {
-		t.Skip("resize succeeded (likely on Unix with PTY available)")
+	if runtime.GOOS == "windows" {
+		// Windows: Resize is a no-op on pipe-based processes.
+		if err != nil {
+			t.Fatalf("Resize should be no-op on Windows, got: %v", err)
+		}
+	} else {
+		// Unix: Resize on a non-PTY process should return an error.
+		if err == nil {
+			t.Fatal("expected error for Resize on non-PTY process")
+		}
 	}
 }
 
@@ -321,7 +330,7 @@ func TestSpawn_MultipleOutputLines(t *testing.T) {
 	echoBin := testutil.EchoBinary(t)
 	sid, err := m.Spawn(echoBin, []string{"line1", "line2", "line3"}, "", nil)
 	if err != nil {
-		t.Skipf("echo not available: %v", err)
+		t.Fatalf("Spawn echo: %v", err)
 	}
 
 	time.Sleep(1 * time.Second)
@@ -346,6 +355,7 @@ func TestSpawn_MultipleOutputLines(t *testing.T) {
 // TestMain provides a safety net to clean up any leaked test processes.
 func TestMain(m *testing.M) {
 	code := m.Run()
-	exec.Command("pkill", "-f", "sleep 60").Run()
+	// pkill only exists on Unix; Skip the cleanup on other platforms.
+	// Each test already calls defer m.Cleanup() which handles cleanup per-test.
 	os.Exit(code)
 }

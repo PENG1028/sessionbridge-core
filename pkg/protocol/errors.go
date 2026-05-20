@@ -7,6 +7,7 @@ const (
 	ErrCodePluginNotFound    = "PLUGIN_NOT_FOUND"
 	ErrCodePluginDisabled    = "PLUGIN_DISABLED"
 	ErrCodeCapNotDeclared    = "CAPABILITY_NOT_DECLARED"
+	ErrCodeCapNotSupported   = "CAPABILITY_UNSUPPORTED_ON_PLATFORM"
 	ErrCodeNotGranted        = "NOT_GRANTED"
 	ErrCodeNeedApproval      = "NEED_APPROVAL"
 	ErrCodePathNotAllowed    = "PATH_NOT_ALLOWED"

@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/user/sessionnode/go-core/internal/capability"
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/platform"
 	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -868,12 +870,12 @@ func TestPluginCheck_RequiredMissing_FailsOverall(t *testing.T) {
 	})
 	r := New(deps)
 	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
-	if m["status"] != "incomplete" {
-		t.Errorf("overall status = %v, want incomplete (required dep missing)", m["status"])
+	if m["status"] != "blocked" {
+		t.Errorf("overall status = %v, want blocked (required dep missing generates missing_dependency blocker)", m["status"])
 	}
 }
 
-func TestPluginCheck_OptionalMissing_DoesNotFailOverall(t *testing.T) {
+func TestPluginCheck_OptionalMissing_ReturnsIncomplete(t *testing.T) {
 	bin := createTempBinary(t, "foundtool")
 	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
 		{ID: "found", Type: "binary", Command: bin, Required: false},
@@ -881,8 +883,8 @@ func TestPluginCheck_OptionalMissing_DoesNotFailOverall(t *testing.T) {
 	})
 	r := New(deps)
 	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
-	if m["status"] != "ok" {
-		t.Errorf("overall status = %v, want ok (optional deps only)", m["status"])
+	if m["status"] != "incomplete" {
+		t.Errorf("overall status = %v, want incomplete (optional dep missing)", m["status"])
 	}
 }
 
@@ -1034,8 +1036,332 @@ func TestPluginCheck_RequiredAndOptionalMixed(t *testing.T) {
 	})
 	r := New(deps)
 	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
-	if m["status"] != "incomplete" {
-		t.Errorf("overall status = %v, want incomplete (one required missing)", m["status"])
+	if m["status"] != "blocked" {
+		t.Errorf("overall status = %v, want blocked (required dep missing generates missing_dependency blocker)", m["status"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// plugin.check capability support tests
+// ---------------------------------------------------------------------------
+
+// capCheckDeps creates Deps with a manifest that has the given permissions.
+// The CapResolver is set to a default resolver from the current platform.
+func capCheckDeps(t *testing.T, pluginID string, perms []pluginmanifest.PermissionSpec) *Deps {
+	t.Helper()
+	deps := fullPluginDeps(t)
+	resolver := &capability.Resolver{Platform: platform.Current()}
+	deps.CapResolver = resolver
+	deps.Manifests = &mockManifestLoader{
+		manifest: &pluginmanifest.Manifest{
+			ID: pluginID,
+			Core: &pluginmanifest.CoreSpec{
+				Permissions:  perms,
+				Environment: pluginmanifest.EnvironmentSpec{},
+			},
+		},
+	}
+	return deps
+}
+
+// capCheckDepsWithResolver creates Deps with a manifest and a custom resolver.
+func capCheckDepsWithResolver(t *testing.T, pluginID string, perms []pluginmanifest.PermissionSpec, resolver *capability.Resolver) *Deps {
+	t.Helper()
+	deps := capCheckDeps(t, pluginID, perms)
+	deps.CapResolver = resolver
+	return deps
+}
+
+func TestPluginCheck_CapSupported_NoBlockers(t *testing.T) {
+	deps := capCheckDeps(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "fs-access", Capabilities: []string{"fs.read", "fs.write", "fs.list"}, Default: "allow"},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify capabilities array is present and populated
+	caps, ok := m["capabilities"].([]interface{})
+	if !ok {
+		t.Fatalf("capabilities is not an array: %T", m["capabilities"])
+	}
+	if len(caps) != 3 {
+		t.Errorf("expected 3 capabilities, got %d", len(caps))
+	}
+	for _, c := range caps {
+		ce := c.(map[string]interface{})
+		if ce["supported"] != true {
+			t.Errorf("capability %q: supported = %v, want true", ce["capability"], ce["supported"])
+		}
+	}
+
+	// Verify no blockers for supported caps
+	blockers := m["blockers"].([]interface{})
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers, got %d: %v", len(blockers), blockers)
+	}
+
+	// Status should be ok
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+}
+
+func TestPluginCheck_CapUnsupported_ProducesBlocker(t *testing.T) {
+	// Create a resolver with a Windows platform where process.resize is unsupported
+	resolver := &capability.Resolver{
+		Platform: platform.RuntimePlatform{OS: "windows", Arch: "amd64", Runtime: "desktop"},
+	}
+	deps := capCheckDepsWithResolver(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "process-access", Capabilities: []string{"process.resize", "process.spawn"}, Default: "allow"},
+	}, resolver)
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify capabilities array
+	caps, ok := m["capabilities"].([]interface{})
+	if !ok {
+		t.Fatalf("capabilities is not an array: %T", m["capabilities"])
+	}
+	if len(caps) != 2 {
+		t.Fatalf("expected 2 capabilities, got %d", len(caps))
+	}
+
+	// process.resize should be unsupported on Windows
+	resizeCap := caps[0].(map[string]interface{})
+	if resizeCap["capability"] != "process.resize" {
+		t.Errorf("first capability = %v, want process.resize", resizeCap["capability"])
+	}
+	if resizeCap["supported"] != false {
+		t.Errorf("process.resize supported = %v, want false", resizeCap["supported"])
+	}
+
+	// process.spawn should be partial (still supported) on Windows
+	spawnCap := caps[1].(map[string]interface{})
+	if spawnCap["capability"] != "process.spawn" {
+		t.Errorf("second capability = %v, want process.spawn", spawnCap["capability"])
+	}
+	if spawnCap["supported"] != true {
+		t.Errorf("process.spawn supported = %v, want true", spawnCap["supported"])
+	}
+
+	// Verify blockers
+	blockers := m["blockers"].([]interface{})
+	if len(blockers) != 1 {
+		t.Fatalf("expected 1 blocker, got %d", len(blockers))
+	}
+	b := blockers[0].(map[string]interface{})
+	if b["kind"] != "unsupported_capability" {
+		t.Errorf("blocker kind = %v, want unsupported_capability", b["kind"])
+	}
+	if b["capability"] != "process.resize" {
+		t.Errorf("blocker capability = %v, want process.resize", b["capability"])
+	}
+	if b["reason"] != "no_pty_resize" {
+		t.Errorf("blocker reason = %v, want no_pty_resize", b["reason"])
+	}
+
+	// Status should be blocked
+	if m["status"] != "blocked" {
+		t.Errorf("status = %v, want blocked", m["status"])
+	}
+}
+
+func TestPluginCheck_MissingDep_ProducesBlocker(t *testing.T) {
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "required-tool", Type: "binary", Command: "this-command-does-not-exist-xyzzy", Required: true},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify status is blocked
+	if m["status"] != "blocked" {
+		t.Errorf("status = %v, want blocked", m["status"])
+	}
+
+	// Verify missing_dependency blocker is present
+	blockers := m["blockers"].([]interface{})
+	found := false
+	for _, blk := range blockers {
+		b := blk.(map[string]interface{})
+		if b["kind"] == "missing_dependency" && b["dependency"] == "required-tool" {
+			found = true
+			if b["reason"] != "binary_missing" {
+				t.Errorf("blocker reason = %v, want binary_missing", b["reason"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected missing_dependency blocker for required-tool, got blockers: %v", blockers)
+	}
+}
+
+func TestPluginCheck_OldDependencyShape_Preserved(t *testing.T) {
+	bin := createTempBinary(t, "shapecheck")
+	deps := checkDeps(t, []pluginmanifest.EnvCheckSpec{
+		{ID: "shapecheck", Type: "binary", Command: bin, Required: false},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify backwards-compatible fields
+	if _, ok := m["pluginId"]; !ok {
+		t.Error("pluginId field missing")
+	}
+	if _, ok := m["status"]; !ok {
+		t.Error("status field missing")
+	}
+	if _, ok := m["dependencies"]; !ok {
+		t.Error("dependencies field missing")
+	}
+
+	depsResult := m["dependencies"].([]interface{})
+	if len(depsResult) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(depsResult))
+	}
+	d := depsResult[0].(map[string]interface{})
+	// Verify old fields are present
+	for _, key := range []string{"id", "type", "status"} {
+		if _, ok := d[key]; !ok {
+			t.Errorf("dependency field %q missing", key)
+		}
+	}
+	if d["status"] != "ok" {
+		t.Errorf("dependency status = %v, want ok", d["status"])
+	}
+}
+
+func TestPluginCheck_CapResolverNil_GracefulDegradation(t *testing.T) {
+	// Create deps with NO CapResolver
+	deps := capCheckDeps(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "fs-access", Capabilities: []string{"fs.read"}, Default: "allow"},
+	})
+	// Explicitly nil out the resolver
+	deps.CapResolver = nil
+
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Capabilities and blockers should be empty (not nil — safely handled)
+	caps, ok := m["capabilities"].([]interface{})
+	if !ok || len(caps) != 0 {
+		t.Errorf("capabilities should be empty when CapResolver is nil, got %v", m["capabilities"])
+	}
+
+	blockers := m["blockers"].([]interface{})
+	if len(blockers) != 0 {
+		t.Errorf("blockers should be empty when CapResolver is nil, got %v", blockers)
+	}
+
+	// Status should still be ok (only dependency checks matter)
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+}
+
+func TestPluginCheck_MissingGrant_ProducesBlocker(t *testing.T) {
+	// Create deps with a permission that defaults to "deny"
+	deps := capCheckDeps(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "fs-write-access", Capabilities: []string{"fs.write"}, Default: "deny"},
+	})
+
+	// No explicit grant is set in config → missing_grant blocker expected
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	blockers := m["blockers"].([]interface{})
+	found := false
+	for _, blk := range blockers {
+		b := blk.(map[string]interface{})
+		if b["kind"] == "missing_grant" && b["capability"] == "fs.write" {
+			found = true
+			if b["reason"] != "not_granted" {
+				t.Errorf("blocker reason = %v, want not_granted", b["reason"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected missing_grant blocker for fs.write, got blockers: %v", blockers)
+	}
+
+	// Status should be blocked
+	if m["status"] != "blocked" {
+		t.Errorf("status = %v, want blocked", m["status"])
+	}
+}
+
+func TestPluginCheck_GrantedCap_NoBlocker(t *testing.T) {
+	// Create deps with a permission that defaults to "ask" but with an explicit allow grant
+	deps := capCheckDeps(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "fs-read-access", Capabilities: []string{"fs.read"}, Default: "ask"},
+	})
+
+	// Set an explicit "allow" grant
+	if err := deps.Config.SetPermissionGrant("test-plugin", "fs.read", "allow", nil); err != nil {
+		t.Fatalf("set permission grant: %v", err)
+	}
+
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// No blockers
+	blockers := m["blockers"].([]interface{})
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers with allow grant, got %d: %v", len(blockers), blockers)
+	}
+
+	// Status should be ok
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+}
+
+func TestPluginCheck_UnknownCapability_ProducesBlocker(t *testing.T) {
+	// Use a platform with Runtime "unknown" so capabilities not in the Matrix
+	// fall through to SupportUnknown (on desktop: full, on mobile: unsupported).
+	resolver := &capability.Resolver{
+		Platform: platform.RuntimePlatform{OS: "linux", Arch: "amd64", Runtime: "unknown"},
+	}
+	deps := capCheckDepsWithResolver(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "custom-access", Capabilities: []string{"custom.madeup"}, Default: "allow"},
+	}, resolver)
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	// Verify unknown_capability blocker
+	blockers := m["blockers"].([]interface{})
+	found := false
+	for _, blk := range blockers {
+		b := blk.(map[string]interface{})
+		if b["kind"] == "unknown_capability" && b["capability"] == "custom.madeup" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unknown_capability blocker for custom.madeup, got blockers: %v", blockers)
+	}
+}
+
+func TestPluginCheck_DedupCapabilities(t *testing.T) {
+	// Two permissions declaring the same capability — should only appear once
+	deps := capCheckDeps(t, "test-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "perm-a", Capabilities: []string{"fs.read", "fs.write"}, Default: "allow"},
+		{ID: "perm-b", Capabilities: []string{"fs.read", "fs.list"}, Default: "allow"},
+	})
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-plugin"})
+
+	caps, ok := m["capabilities"].([]interface{})
+	if !ok {
+		t.Fatalf("capabilities is not an array: %T", m["capabilities"])
+	}
+	if len(caps) != 3 {
+		t.Errorf("expected 3 unique capabilities, got %d: %v", len(caps), caps)
+	}
+
+	// No blockers for fully supported caps
+	blockers := m["blockers"].([]interface{})
+	if len(blockers) != 0 {
+		t.Errorf("expected 0 blockers, got %d", len(blockers))
 	}
 }
 

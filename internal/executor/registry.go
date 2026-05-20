@@ -43,6 +43,9 @@ type Deps struct {
 	Nodes      NodeLister
 	History    *history.Store
 	Manifests  ManifestLoader
+	// CapResolver resolves capability support against the current platform.
+	// When nil, capability support checking is skipped (graceful degradation).
+	CapResolver *capability.Resolver
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -73,10 +76,12 @@ func New(deps *Deps) *Registry {
 // Execute dispatches a capability request to the registered handler.
 func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
 	plat := platform.Current()
-	if capability.Support(req.Capability, plat) == capability.Unsupported {
+	resolver := capability.Resolver{Platform: plat}
+	cs := resolver.CheckCapability(req.Capability)
+	if !cs.Supported {
 		return nil, &types.CoreError{
 			Code:    "CAPABILITY_UNSUPPORTED_ON_PLATFORM",
-			Message: fmt.Sprintf("capability %q is not supported on %s", req.Capability, plat),
+			Message: fmt.Sprintf("capability %q is not supported on %s", req.Capability, plat.OS),
 		}
 	}
 

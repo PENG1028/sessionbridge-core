@@ -1,12 +1,9 @@
 package executor
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -199,14 +196,4 @@ func pluginCacheClearExecute(req *types.CapabilityRequest, deps *Deps) (interfac
 	}
 
 	return nil, fmt.Errorf("clearable cache %q not found for plugin %q", payload.CacheID, targetID)
-}
-
-// randomPlanID generates a random hex string for use as a plan ID.
-func randomPlanID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// Fallback in case rand.Read fails (extremely unlikely)
-		return fmt.Sprintf("plan_%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
 }
