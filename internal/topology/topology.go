@@ -81,6 +81,11 @@ func (p *Peer) getStatus() string {
 
 // --- PeerTopology ---
 
+// StreamChunkHandler is called when a stream.chunk or session.event message
+// arrives from a peer. The handler must route the chunk to local subscribers
+// (typically via wsconn.Registry.PushChunk / PushSessionEvent).
+type StreamChunkHandler func(msg *protocol.Message)
+
 // PeerTopology implements dispatcher.Topology and executor.NodeLister.
 //
 // It maintains WebSocket connections to all configured peers and provides
@@ -92,6 +97,8 @@ type PeerTopology struct {
 
 	pending   map[types.RequestID]chan *types.CapabilityResponse
 	pendingMu sync.Mutex
+
+	streamChunkHandler StreamChunkHandler
 
 	mu  sync.RWMutex
 	log *log.Logger
@@ -120,6 +127,15 @@ func New(cfg Config) *PeerTopology {
 	}
 
 	return pt
+}
+
+// SetStreamChunkHandler registers the handler for incoming stream.chunk and
+// session.event messages from peers. When nil (default), the messages are
+// logged and dropped gracefully.
+func (pt *PeerTopology) SetStreamChunkHandler(h StreamChunkHandler) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.streamChunkHandler = h
 }
 
 // Start connects to all non-local peers in the background.
@@ -312,6 +328,16 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 			resp.Error = &types.CoreError{Code: msg.Error.Code, Message: msg.Error.Message}
 		}
 		ch <- resp
+
+	case protocol.MsgTypeStreamChunk, protocol.MsgTypeSessionEvent:
+		pt.mu.RLock()
+		h := pt.streamChunkHandler
+		pt.mu.RUnlock()
+		if h != nil {
+			h(msg)
+		} else {
+			pt.log.Printf("stream chunk/event from %s dropped: no handler registered (type=%q session=%s)", senderID, msg.Type, msg.SessionID)
+		}
 
 	default:
 		pt.log.Printf("unhandled message type %q from %s", msg.Type, senderID)

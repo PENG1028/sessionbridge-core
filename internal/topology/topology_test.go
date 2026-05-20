@@ -1,8 +1,11 @@
 package topology
 
 import (
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -264,5 +267,227 @@ func TestPeerName_Remote(t *testing.T) {
 	name := peerName(p, "main", "dev")
 	if name != "vps-node" {
 		t.Errorf("expected 'vps-node', got %q", name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandleMessage tests — stream.chunk / session.event forwarding
+// ---------------------------------------------------------------------------
+
+func TestHandleMessage_StreamChunk_WithHandler(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+
+	var (
+		mu        sync.Mutex
+		received  *protocol.Message
+		callCount int
+	)
+	pt.SetStreamChunkHandler(func(msg *protocol.Message) {
+		mu.Lock()
+		defer mu.Unlock()
+		received = msg
+		callCount++
+	})
+
+	msg := protocol.NewStreamChunk("sess_1", "stdout", 42, "hello world")
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	pt.HandleMessage("peer-a", raw)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("handler called %d times, want 1", callCount)
+	}
+	if received == nil {
+		t.Fatal("handler did not receive message")
+	}
+	if received.Type != protocol.MsgTypeStreamChunk {
+		t.Errorf("Type = %q, want %q", received.Type, protocol.MsgTypeStreamChunk)
+	}
+	if received.SessionID != "sess_1" {
+		t.Errorf("SessionID = %q, want sess_1", received.SessionID)
+	}
+	if received.StreamType != "stdout" {
+		t.Errorf("StreamType = %q, want stdout", received.StreamType)
+	}
+	if received.EventSeq != 42 {
+		t.Errorf("EventSeq = %d, want 42", received.EventSeq)
+	}
+	if received.Data != "hello world" {
+		t.Errorf("Data = %q, want hello world", received.Data)
+	}
+}
+
+func TestHandleMessage_SessionEvent_WithHandler(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+
+	var (
+		mu       sync.Mutex
+		received *protocol.Message
+	)
+	pt.SetStreamChunkHandler(func(msg *protocol.Message) {
+		mu.Lock()
+		defer mu.Unlock()
+		received = msg
+	})
+
+	msg := protocol.NewSessionEvent("sess_1", 7, "exited", nil)
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	pt.HandleMessage("peer-b", raw)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if received == nil {
+		t.Fatal("handler did not receive session.event message")
+	}
+	if received.Type != protocol.MsgTypeSessionEvent {
+		t.Errorf("Type = %q, want %q", received.Type, protocol.MsgTypeSessionEvent)
+	}
+	if received.SessionID != "sess_1" {
+		t.Errorf("SessionID = %q, want sess_1", received.SessionID)
+	}
+	if received.EventSeq != 7 {
+		t.Errorf("EventSeq = %d, want 7", received.EventSeq)
+	}
+}
+
+func TestHandleMessage_StreamChunk_NoHandler(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+	// No handler set — should not panic.
+
+	msg := protocol.NewStreamChunk("sess_1", "stdout", 1, "data")
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// This must not panic.
+	pt.HandleMessage("peer-a", raw)
+}
+
+func TestHandleMessage_ActionResponse_StillWorks(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+
+	// Register a pending request
+	reqID := types.RequestID("req_001")
+	ch := make(chan *types.CapabilityResponse, 1)
+	pt.pendingMu.Lock()
+	pt.pending[reqID] = ch
+	pt.pendingMu.Unlock()
+
+	// Build an action.response message
+	respMsg := &protocol.Message{
+		Type:      protocol.MsgTypeActionResponse,
+		RequestID: reqID,
+		OK:        true,
+	}
+	raw, err := respMsg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	pt.HandleMessage("peer-a", raw)
+
+	select {
+	case resp := <-ch:
+		if !resp.OK {
+			t.Error("expected OK=true")
+		}
+		if resp.RequestID != reqID {
+			t.Errorf("RequestID = %q, want %q", resp.RequestID, reqID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for action.response to be delivered")
+	}
+}
+
+func TestHandleMessage_UnknownType_NoPanic(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+
+	msg := &protocol.Message{
+		Type: "unknown.fake.type",
+	}
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Must not panic.
+	pt.HandleMessage("peer-a", raw)
+}
+
+func TestHandleMessage_UnknownType_NoPanic_AfterStreamHandlerSet(t *testing.T) {
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+	pt.SetStreamChunkHandler(func(msg *protocol.Message) {})
+
+	msg := &protocol.Message{
+		Type: "unknown.fake.type",
+	}
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Must not panic — unknown type should still go to default case.
+	pt.HandleMessage("peer-a", raw)
+}
+
+func TestHandleMessage_StreamChunk_NoPendingSideEffect(t *testing.T) {
+	// Verifies that stream.chunk does not interfere with the pending request map.
+	pt := New(Config{LocalID: "test", LocalName: "test"})
+
+	// Register a pending request
+	reqID := types.RequestID("req_002")
+	ch := make(chan *types.CapabilityResponse, 1)
+	pt.pendingMu.Lock()
+	pt.pending[reqID] = ch
+	pt.pendingMu.Unlock()
+
+	var handlerCalled bool
+	pt.SetStreamChunkHandler(func(msg *protocol.Message) {
+		handlerCalled = true
+	})
+
+	// Send a stream.chunk first
+	streamMsg := protocol.NewStreamChunk("sess_x", "stdout", 1, "data")
+	raw, _ := streamMsg.MarshalJSON()
+	pt.HandleMessage("peer-a", raw)
+
+	if !handlerCalled {
+		t.Error("stream chunk handler was not called")
+	}
+
+	// Pending request should still be intact
+	pt.pendingMu.Lock()
+	_, exists := pt.pending[reqID]
+	pt.pendingMu.Unlock()
+	if !exists {
+		t.Error("pending request was incorrectly removed by stream.chunk handling")
+	}
+
+	// Action.response should still work
+	respMsg := &protocol.Message{
+		Type:      protocol.MsgTypeActionResponse,
+		RequestID: reqID,
+		OK:        true,
+	}
+	raw, _ = respMsg.MarshalJSON()
+	pt.HandleMessage("peer-a", raw)
+
+	select {
+	case resp := <-ch:
+		if !resp.OK {
+			t.Error("expected OK=true")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for action.response after stream.chunk")
 	}
 }

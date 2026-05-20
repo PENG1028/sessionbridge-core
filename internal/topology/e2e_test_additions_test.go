@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/user/sessionnode/go-core/internal/auth"
 	"github.com/user/sessionnode/go-core/internal/dispatcher"
@@ -19,6 +23,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/testutil"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
+	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -537,4 +542,192 @@ func TestVPS_RemoteConnection(t *testing.T) {
 	if _, ok := procBody["processes"]; ok {
 		t.Logf("VPS process.list OK: %d processes", int(procBody["total"].(float64)))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-node real-time stream.chunk forwarding
+// ---------------------------------------------------------------------------
+
+// TestTwoCore_CrossNodeStreamChunk verifies that a WS client connected to
+// Node A receives real-time stream.chunk messages from a process running on
+// Node B. This is the core cross-node terminal live-output path.
+func TestTwoCore_CrossNodeStreamChunk(t *testing.T) {
+	echoPath := testutil.EchoBinary(t)
+
+	// ── Node B (remote/peer): where the process runs ──────────────
+	_, peerHTTPSrv := testPeerNode(t, "node-b")
+	peerAddr := peerAddr(peerHTTPSrv)
+
+	// ── Node A (local/main): where the WS client connects ─────────
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	pm := process.NewManager(cr.PushChunk, cr.PushSessionEvent)
+	execDeps := &executor.Deps{
+		Sessions:   sessStore,
+		Processes:  pm,
+		ConnRoutes: cr,
+	}
+	execReg := executor.New(execDeps)
+	permChecker := permission.NewChecker(&permitAllCaps{}, &permitAllPolicy{})
+
+	// Topology with stream chunk handler wired to local connRegistry.
+	pt := New(Config{
+		LocalID:   "node-a",
+		LocalName: "node-a",
+		Peers: []PeerConfig{
+			{ID: "node-b", Address: peerAddr},
+		},
+	})
+	pt.SetStreamChunkHandler(func(msg *protocol.Message) {
+		switch msg.Type {
+		case protocol.MsgTypeStreamChunk:
+			cr.PushChunk(msg.SessionID, msg.StreamType, msg.EventSeq, msg.Data)
+		case protocol.MsgTypeSessionEvent:
+			cr.PushSessionEvent(msg.SessionID, msg.EventSeq, msg.Data, msg.Payload)
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go pt.Start(ctx)
+	waitPeerStatus(t, pt, "node-b", StatusConnected, 5*time.Second)
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(""),
+		&allowAnyPlugin{},
+		permChecker,
+		nil,
+		execReg,
+		&silentAudit{},
+		pt,
+		"node-a",
+	)
+
+	sv := server.New("", d, sessStore, cr, pm)
+	mainHTTPSrv := httptest.NewServer(sv.Handler())
+	defer mainHTTPSrv.Close()
+
+	// ── WS client connects to Node A ──────────────────────────────
+	wsURL := "ws" + strings.TrimPrefix(mainHTTPSrv.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("WS dial error: %v", err)
+	}
+	defer conn.Close()
+
+	// ── Spawn process on Node B ───────────────────────────────────
+	spawnPayload := json.RawMessage(fmt.Sprintf(
+		`{"command":%q,"args":["hello from node-b"]}`,
+		echoPath,
+	))
+	spawnMsg := &protocol.Message{
+		Type:         protocol.MsgTypeActionRequest,
+		RequestID:    "req_spawn",
+		Capability:   "process.spawn",
+		TargetNodeID: "node-b",
+		PluginID:     "sessionnode-core",
+		Payload:      spawnPayload,
+	}
+	spawnData, _ := spawnMsg.MarshalJSON()
+	if err := conn.WriteMessage(websocket.TextMessage, spawnData); err != nil {
+		t.Fatalf("write spawn error: %v", err)
+	}
+
+	// Read spawn response (may need to skip intermediate messages)
+	var spawnResp *protocol.Message
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read error waiting for spawn response: %v", err)
+		}
+		m, err := protocol.UnmarshalMessage(raw)
+		if err != nil {
+			continue
+		}
+		if string(m.RequestID) == "req_spawn" {
+			spawnResp = m
+			break
+		}
+	}
+	if !spawnResp.OK {
+		t.Fatalf("process.spawn on node-b failed: %v", spawnResp.Error)
+	}
+	var spawnBody map[string]interface{}
+	json.Unmarshal(spawnResp.Payload, &spawnBody)
+	sessionID := spawnBody["sessionId"].(string)
+	t.Logf("spawned process on node-b: sessionId=%s", sessionID)
+
+	// ── Subscribe to stdout on Node B via Node A ──────────────────
+	subPayload := json.RawMessage(fmt.Sprintf(
+		`{"sessionId":%q,"streamType":"stdout"}`,
+		sessionID,
+	))
+	subMsg := &protocol.Message{
+		Type:         protocol.MsgTypeActionRequest,
+		RequestID:    "req_sub",
+		Capability:   "stream.subscribe",
+		TargetNodeID: "node-b",
+		PluginID:     "sessionnode-core",
+		Payload:      subPayload,
+	}
+	subData, _ := subMsg.MarshalJSON()
+	if err := conn.WriteMessage(websocket.TextMessage, subData); err != nil {
+		t.Fatalf("write sub error: %v", err)
+	}
+
+	// ── Collect stream.chunk messages ─────────────────────────────
+	var (
+		chunks   []*protocol.Message
+		chunksMu sync.Mutex
+		done     = make(chan struct{})
+	)
+	go func() {
+		defer close(done)
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				return
+			default:
+			}
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			m, err := protocol.UnmarshalMessage(raw)
+			if err != nil {
+				continue
+			}
+			if m.Type == protocol.MsgTypeStreamChunk && m.SessionID == types.SessionID(sessionID) {
+				chunksMu.Lock()
+				chunks = append(chunks, m)
+				chunksMu.Unlock()
+				if len(chunks) >= 1 {
+					return // got the chunk we need
+				}
+			}
+		}
+	}()
+	<-done
+
+	chunksMu.Lock()
+	n := len(chunks)
+	chunksMu.Unlock()
+
+	if n == 0 {
+		t.Fatal("no stream.chunk received from cross-node process — forwarding is broken")
+	}
+
+	chunk := chunks[0]
+	if chunk.SessionID != types.SessionID(sessionID) {
+		t.Errorf("SessionID = %q, want %q", chunk.SessionID, sessionID)
+	}
+	if chunk.StreamType != "stdout" {
+		t.Errorf("StreamType = %q, want stdout", chunk.StreamType)
+	}
+	if chunk.Data == "" {
+		t.Error("stream.chunk Data is empty")
+	}
+	t.Logf("cross-node stream.chunk OK: session=%s stream=%s data=%q", chunk.SessionID, chunk.StreamType, chunk.Data)
 }

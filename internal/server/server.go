@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -343,8 +344,42 @@ func (s *Server) dispatchAction(msg *protocol.Message, connID string) *protocol.
 		},
 	}
 
+	// For cross-node stream.subscribe, register the subscription locally
+	// so that forwarded stream.chunk messages can reach the client.
+	if capability == "stream.subscribe" && req.TargetNodeID != "" {
+		s.registerLocalStreamSub(connID, req)
+	}
+
 	resp := s.dispatcher.Dispatch(req)
 	return actionResponseToMessage(msg, resp)
+}
+
+// registerLocalStreamSub parses a stream.subscribe payload and registers a
+// local subscription. This is needed for cross-node subscriptions where the
+// dispatcher forwards the request to the remote node without calling the
+// local executor.
+func (s *Server) registerLocalStreamSub(connID string, req *types.CapabilityRequest) {
+	var p struct {
+		SessionID  string         `json:"sessionId"`
+		Stream     string         `json:"stream"`
+		StreamType string         `json:"streamType"`
+		FromSeq    types.EventSeq `json:"fromSeq,omitempty"`
+	}
+	if err := json.Unmarshal(req.Payload, &p); err != nil || p.SessionID == "" {
+		return
+	}
+	stream := p.Stream
+	if p.StreamType != "" {
+		stream = p.StreamType
+	}
+	if stream == "" {
+		return
+	}
+	streamTypes := strings.Split(stream, ",")
+	for i := range streamTypes {
+		streamTypes[i] = strings.TrimSpace(streamTypes[i])
+	}
+	s.connRegistry.Subscribe(connID, types.SessionID(p.SessionID), streamTypes, req.PluginID, req.Actor, p.FromSeq)
 }
 
 func actionResponseToMessage(reqMsg *protocol.Message, resp *types.CapabilityResponse) *protocol.Message {

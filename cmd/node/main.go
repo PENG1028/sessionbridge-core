@@ -23,6 +23,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/topology"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
+	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -99,6 +100,15 @@ func main() {
 		Peers:     peers,
 	}
 	topo := topology.New(topoCfg)
+	// Forward stream chunks and session events from peers to local subscribers.
+	topo.SetStreamChunkHandler(func(msg *protocol.Message) {
+		switch msg.Type {
+		case protocol.MsgTypeStreamChunk:
+			connRegistry.PushChunk(msg.SessionID, msg.StreamType, msg.EventSeq, msg.Data)
+		case protocol.MsgTypeSessionEvent:
+			connRegistry.PushSessionEvent(msg.SessionID, msg.EventSeq, msg.Data, msg.Payload)
+		}
+	})
 	topoCtx, topoCancel := context.WithCancel(context.Background())
 	go topo.Start(topoCtx)
 	defer topoCancel()
