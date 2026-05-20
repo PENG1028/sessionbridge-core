@@ -39,6 +39,10 @@ func (e *PluginPermissionError) Error() string {
 	return e.Code + ": " + e.Message
 }
 
+// ErrorCode returns the protocol error code, enabling the dispatcher to
+// preserve the specific error type rather than mapping everything to PERMISSION_DENIED.
+func (e *PluginPermissionError) ErrorCode() string { return e.Code }
+
 // Checker implements the 4-step permission check:
 // capability declared? → grant exists? → mode check → constraints check.
 type Checker struct {
@@ -95,9 +99,28 @@ func (c *Checker) Check(req *types.CapabilityRequest) error {
 	return nil
 }
 
-// checkConstraints validates path/key constraints for the request.
+// checkConstraints validates path/key/node-scope constraints for the request.
 // Phase 0: basic prefix matching. Phase 1+: full glob support.
 func (c *Checker) checkConstraints(cons *types.PermissionConstraints, req *types.CapabilityRequest) error {
+	// Check target node scope: if TargetNodes is set, require a match.
+	if len(cons.TargetNodes) > 0 {
+		target := string(req.TargetNodeID)
+		if target != "" && !matchesAny(target, cons.TargetNodes) {
+			return &PluginPermissionError{
+				Code:    protocol.ErrCodeNodeNotAllowed,
+				Message: "target node not in allowed list: " + target,
+			}
+		}
+		// If TargetNodeID is empty (local execution) and scope is non-empty,
+		// the grant explicitly restricts to listed nodes — reject local.
+		if target == "" {
+			return &PluginPermissionError{
+				Code:    protocol.ErrCodeNodeNotAllowed,
+				Message: "local execution not allowed by node-scoped grant",
+			}
+		}
+	}
+
 	// TODO: Phase 1 — full glob matching with **, *, ${workspace} resolution.
 	// Phase 0: if Allow is non-empty, require at least one prefix match
 	// of the payload path against the allow list.

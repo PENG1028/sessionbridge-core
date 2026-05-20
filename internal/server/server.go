@@ -229,10 +229,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	writeWg.Add(1)
 	go s.writeLoop(conn, writeCh, &writeWg)
 
-	// Track sessions owned by this connection.
-	var ownedMu sync.Mutex
-	owned := make(map[types.SessionID]struct{})
-
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -250,7 +246,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		resp := s.handleMessage(raw)
+		resp := s.handleMessage(raw, writeCh)
 		if resp == nil {
 			continue
 		}
@@ -260,9 +256,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			sid := extractSessionID(resp.Payload)
 			if sid != "" {
 				s.connRegistry.Register(sid, writeCh)
-				ownedMu.Lock()
-				owned[sid] = struct{}{}
-				ownedMu.Unlock()
 			}
 		}
 
@@ -279,12 +272,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cleanup: unregister all owned sessions.
-	ownedMu.Lock()
-	for sid := range owned {
-		s.connRegistry.Unregister(sid)
-	}
-	ownedMu.Unlock()
+	// Cleanup: remove all routes owned by this connection's write channel.
+	// Using RemoveAllForCh instead of per-sid unregister avoids a race where
+	// a new WS connection re-registers a session (via process.spawn response or
+	// stream.subscribe) before the old connection's cleanup runs — per-sid
+	// cleanup would then delete the new connection's route.
+	s.connRegistry.RemoveAllForCh(writeCh)
 
 	close(writeCh)
 	writeWg.Wait()
@@ -303,7 +296,7 @@ func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.Wait
 	}
 }
 
-func (s *Server) handleMessage(raw []byte) *protocol.Message {
+func (s *Server) handleMessage(raw []byte, writeCh chan<- []byte) *protocol.Message {
 	msg, err := protocol.UnmarshalMessage(raw)
 	if err != nil {
 		log.Printf("[server] unmarshal error: %v", err)
@@ -318,11 +311,11 @@ func (s *Server) handleMessage(raw []byte) *protocol.Message {
 	case msg.Type == protocol.MsgTypeHello:
 		return protocol.NewWelcome(msg.NodeID)
 	default:
-		return s.dispatchAction(msg)
+		return s.dispatchAction(msg, writeCh)
 	}
 }
 
-func (s *Server) dispatchAction(msg *protocol.Message) *protocol.Message {
+func (s *Server) dispatchAction(msg *protocol.Message, writeCh chan<- []byte) *protocol.Message {
 	capability := msg.Capability
 	if capability == "" {
 		capability = msg.Type
@@ -344,8 +337,9 @@ func (s *Server) dispatchAction(msg *protocol.Message) *protocol.Message {
 		Payload:      msg.Payload,
 		Timestamp:    msg.Timestamp,
 		Actor: types.Actor{
-			Type: actorType,
-			ID:   actorID,
+			Type:  actorType,
+			ID:    actorID,
+			Token: msg.ActorToken,
 		},
 	}
 

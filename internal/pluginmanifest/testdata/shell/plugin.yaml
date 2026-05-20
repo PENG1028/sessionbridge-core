@@ -1,0 +1,122 @@
+manifestVersion: "1"
+id: shell
+name: Shell
+version: 1.0.0
+type: plugin
+trusted: true
+description: Terminal shell sessions
+author: SessionNode
+license: MIT
+
+core:
+  permissions:
+    - id: shell.session
+      description: Create and manage shell sessions
+      capabilities:
+        - session.create
+        - session.list
+        - session.get
+        - session.stop
+      default: ask
+      constraints:
+        paths:
+          allow:
+            - "${workspace}/**"
+
+    - id: shell.process
+      description: Spawn and control shell processes
+      capabilities:
+        - process.spawn
+        - process.kill
+        - process.resize
+        - process.list
+      default: deny
+
+    - id: shell.stream
+      description: Subscribe to shell output streams
+      capabilities:
+        - stream.subscribe
+        - stream.write
+        - stream.list
+        - stream.replay
+        - stream.tail
+      default: allow
+
+    - id: shell.env
+      description: Read environment variables
+      capabilities:
+        - env.get
+        - env.list
+        - env.checkBinary
+        - env.which
+      default: allow
+
+  environment:
+    checks:
+      - id: available-shells
+        type: binary
+        required: false
+        command: bash
+        installHint: "Install bash via your package manager"
+
+      - id: powershell
+        type: binary
+        required: false
+        command: pwsh
+
+  files:
+    logs: "${plugin.logsDir}"
+    declarations:
+      - id: shell-logs
+        path: "${plugin.logsDir}/sessions"
+        description: Shell session logs
+        clearable: true
+
+  history:
+    defaultPolicy: memory
+
+adapters:
+  system-ui:
+    views:
+      - id: shell.terminal
+        surface: main.editor
+        type: custom-react
+        entry: ./web/TerminalView.tsx
+        title: Terminal
+
+    panels:
+      - id: shell.sessions
+        surface: main.editor.bottom
+        type: custom-react
+        entry: ./web/SessionPanel.tsx
+        title: Sessions
+
+    commands:
+      - id: shell.new
+        title: New Terminal
+        command: shell.new
+
+  cli:
+    commands:
+      - id: shell.cli.start
+        name: start
+        description: Start a new shell session
+        entry: ./cli/index.ts
+        handler: startShell
+        args: "[command]"
+        examples:
+          - "node shell start"
+          - "node shell start bash"
+
+      - id: shell.cli.list
+        name: list
+        description: List active shell sessions
+        entry: ./cli/index.ts
+        handler: listSessions
+
+      - id: shell.cli.attach
+        name: attach
+        description: Attach to a running shell session
+        entry: ./cli/index.ts
+        handler: attachSession
+        args: "<session-id>"

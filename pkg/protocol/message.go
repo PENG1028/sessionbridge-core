@@ -50,6 +50,7 @@ type Message struct {
 	RespondedBy  string            `json:"respondedBy,omitempty"`
 	ActorType    string            `json:"actorType,omitempty"`   // for forwarded requests: "node"
 	ActorID      string            `json:"actorId,omitempty"`     // for forwarded requests: forwarding node ID
+		ActorToken   string            `json:"actorToken,omitempty"`  // auth token for external clients
 	Payload      json.RawMessage   `json:"payload,omitempty"`
 	Error        *types.CoreError  `json:"error,omitempty"`
 	Timestamp    int64             `json:"timestamp,omitempty"`

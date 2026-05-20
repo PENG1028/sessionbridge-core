@@ -127,7 +127,13 @@ func (d *Dispatcher) Dispatch(req *types.CapabilityRequest) *types.CapabilityRes
 	// Step 4: Check permission
 	if err := d.permissions.Check(req); err != nil {
 		d.audit.Log(req, false, err.Error())
-		return errorResponse(req, protocol.ErrCodePermissionDenied, err.Error())
+		// Preserve the specific error code (e.g. NODE_NOT_ALLOWED, PATH_NOT_ALLOWED)
+		// instead of mapping everything to PERMISSION_DENIED.
+		code := protocol.ErrCodePermissionDenied
+		if ce, ok := err.(interface{ ErrorCode() string }); ok {
+			code = ce.ErrorCode()
+		}
+		return errorResponse(req, code, err.Error())
 	}
 
 	// Step 4.5: Plan Before Apply for high-risk capabilities.

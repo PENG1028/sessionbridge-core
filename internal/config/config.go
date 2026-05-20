@@ -26,6 +26,10 @@ type Config struct {
 	Node     NodeConfig     `json:"node"`
 	Plugin   PluginConfig   `json:"plugin"`
 	Topology TopologyConfig `json:"topology,omitempty"`
+
+	// Revision is an opaque counter incremented on every Save() or Set().
+	// Used by SetWithRevision() for optimistic concurrency control.
+	Revision int64 `json:"_revision"`
 }
 
 // TopologyConfig holds the peer discovery configuration.
@@ -76,7 +80,9 @@ type NodeConfig struct {
 
 // PluginConfig holds plugin-level settings.
 type PluginConfig struct {
-	Permissions map[string]map[string]PermissionGrant `json:"permissions,omitempty"`
+	PluginDirs      []string                                `json:"pluginDirs,omitempty"`
+	DisabledPlugins []string                                `json:"disabledPlugins,omitempty"`
+	Permissions     map[string]map[string]PermissionGrant   `json:"permissions,omitempty"`
 }
 
 // PermissionGrant describes how a capability is gated for a plugin.
@@ -124,6 +130,11 @@ func defaultConfig() Config {
 		},
 		Node: NodeConfig{
 			Role: "standalone",
+		},
+		Plugin: PluginConfig{
+			PluginDirs: []string{
+				filepath.Join(dataDir, "plugins"),
+			},
 		},
 	}
 }
@@ -199,10 +210,51 @@ func (m *Manager) Load() error {
 	return nil
 }
 
+// ConfigConflictError is returned when SetWithRevision detects a concurrent write.
+type ConfigConflictError struct {
+	ExpectedRevision int64
+	ActualRevision   int64
+}
+
+func (e *ConfigConflictError) Error() string {
+	return fmt.Sprintf("config revision conflict: expected %d, actual %d", e.ExpectedRevision, e.ActualRevision)
+}
+
 // Save writes the current config to disk as pretty-printed JSON.
 func (m *Manager) Save() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.config.Revision++
+	return m.saveLocked()
+}
+
+// SetWithRevision updates a config field only if the expectedRevision matches
+// the current revision counter. Returns ConfigConflictError on mismatch.
+// Pass expectedRevision=0 to bypass the check (first-time or force set).
+func (m *Manager) SetWithRevision(key string, value interface{}, expectedRevision int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if expectedRevision != 0 && m.config.Revision != expectedRevision {
+		return &ConfigConflictError{
+			ExpectedRevision: expectedRevision,
+			ActualRevision:   m.config.Revision,
+		}
+	}
+
+	parts := strings.Split(key, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return fmt.Errorf("config: empty key")
+	}
+
+	v := reflect.ValueOf(&m.config).Elem()
+	if err := setField(v, parts, value); err != nil {
+		return fmt.Errorf("config: set %q: %w", key, err)
+	}
+
+	m.config.Revision++
+	log.Printf("[config] %s = %v (rev %d)", key, value, m.config.Revision)
+	m.config = applyDefaults(m.config)
 	return m.saveLocked()
 }
 
@@ -284,7 +336,8 @@ func (m *Manager) Set(key string, value interface{}) error {
 		return fmt.Errorf("config: set %q: %w", key, err)
 	}
 
-	log.Printf("[config] %s = %v", key, value)
+	m.config.Revision++
+	log.Printf("[config] %s = %v (rev %d)", key, value, m.config.Revision)
 	m.config = applyDefaults(m.config) // re-apply defaults after mutation
 	return nil
 }

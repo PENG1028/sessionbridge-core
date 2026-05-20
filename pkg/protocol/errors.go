@@ -10,6 +10,7 @@ const (
 	ErrCodeNotGranted        = "NOT_GRANTED"
 	ErrCodeNeedApproval      = "NEED_APPROVAL"
 	ErrCodePathNotAllowed    = "PATH_NOT_ALLOWED"
+	ErrCodeNodeNotAllowed    = "NODE_NOT_ALLOWED"
 	ErrCodeNodeUnreachable   = "NODE_UNREACHABLE"
 	ErrCodeForwardError      = "FORWARD_ERROR"
 	ErrCodeExecutionError    = "EXECUTION_ERROR"

@@ -87,6 +87,34 @@ func sendAndRecv(t *testing.T, conn *websocket.Conn, msg *protocol.Message) *pro
 	return resp
 }
 
+// sendAndRecvRequestID sends a message and reads responses until it finds one
+// with a matching RequestID, discarding intermediate push messages (stream.chunk,
+// session events, etc.). This prevents test flakiness when push messages arrive
+// between request/response pairs on the same connection.
+func sendAndRecvRequestID(t *testing.T, conn *websocket.Conn, msg *protocol.Message, requestID string) *protocol.Message {
+	t.Helper()
+	data, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read error: %v (raw: %s)", err, string(raw))
+		}
+		resp, err := protocol.UnmarshalMessage(raw)
+		if err != nil {
+			t.Fatalf("unmarshal error: %v (raw: %s)", err, string(raw))
+		}
+		if string(resp.RequestID) == requestID {
+			return resp
+		}
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	_, srv := testServer(t)
 	defer srv.Close()
@@ -775,8 +803,8 @@ func TestWSAccessControl_UndeclaredCap(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatal("expected error message")
 	}
-	if resp.Error.Code != protocol.ErrCodePermissionDenied {
-		t.Errorf("code = %q, want %q", resp.Error.Code, protocol.ErrCodePermissionDenied)
+	if resp.Error.Code != protocol.ErrCodeCapNotDeclared {
+		t.Errorf("code = %q, want %q", resp.Error.Code, protocol.ErrCodeCapNotDeclared)
 	}
 }
 
@@ -851,6 +879,178 @@ func TestWSAccessControl_DenyMode(t *testing.T) {
 	}
 }
 
+// ─── Terminal Plugin E2E ─────────────────────────────────────────
+
+func TestTerminalPluginE2E(t *testing.T) {
+	_, srv, hStore := testServerWithHistory(t)
+	defer srv.Close()
+	defer hStore.Cleanup()
+
+	//
+	// Part A: process.spawn → stream.replay verifies that process output
+	// is captured in history. Keep the same connection alive.
+	//
+	conn := wsConnect(t, srv)
+	defer conn.Close()
+
+	spawnPayload := json.RawMessage(`{"command":"go","args":["version"]}`)
+	spawnResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_spawn",
+		Capability: "process.spawn",
+		Payload:    spawnPayload,
+	})
+	if !spawnResp.OK {
+		t.Fatalf("spawn failed: %v", spawnResp.Error)
+	}
+	var spawnBody map[string]interface{}
+	if err := json.Unmarshal(spawnResp.Payload, &spawnBody); err != nil {
+		t.Fatalf("unmarshal spawn: %v", err)
+	}
+	sessionID, ok := spawnBody["sessionId"].(string)
+	if !ok || sessionID == "" {
+		t.Fatal("expected sessionId in spawn response")
+	}
+
+	// Wait for process to finish and history to capture output.
+	time.Sleep(1 * time.Second)
+
+	// Verify history captured output via direct store access (not stream.replay)
+	histEvents, err := hStore.Replay(types.SessionID(sessionID), "stdout", 0)
+	if err != nil {
+		t.Fatalf("history.Replay failed: %v", err)
+	}
+	if len(histEvents) == 0 {
+		t.Fatal("expected at least 1 replayed event from process output (direct history check)")
+	}
+	hasHistoryData := false
+	for _, evt := range histEvents {
+		if evt.Data != "" {
+			hasHistoryData = true
+			break
+		}
+	}
+	if !hasHistoryData {
+		t.Error("expected non-empty data in history events")
+	}
+
+	// Also verify via stream.replay WebSocket request.
+	// Use sendAndRecvRequestID to discard any push messages (stream.chunk, session events)
+	// that arrived after the process finished.
+	replayResp := sendAndRecvRequestID(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_replay",
+		Capability: "stream.replay",
+		Payload:    json.RawMessage(`{"sessionId":"` + sessionID + `","streamType":"stdout"}`),
+	}, "req_replay")
+	if !replayResp.OK {
+		t.Fatalf("stream.replay failed: %v", replayResp.Error)
+	}
+	var replayBody map[string]interface{}
+	if err := json.Unmarshal(replayResp.Payload, &replayBody); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	events, ok := replayBody["events"].([]interface{})
+	if !ok {
+		t.Fatalf("expected events array, got %T", replayBody["events"])
+	}
+	if len(events) == 0 {
+		t.Fatal("expected at least 1 replayed event from process output")
+	}
+	hasData := false
+	for _, evt := range events {
+		evtMap, ok := evt.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if d, ok := evtMap["data"].(string); ok && d != "" {
+			hasData = true
+			break
+		}
+	}
+	if !hasData {
+		t.Error("expected non-empty data in replayed events")
+	}
+
+	//
+	// Part B: stream.write with streamType field → stream.replay verifies
+	// that the streamType field is accepted end-to-end.
+	//
+	createPayload := json.RawMessage(`{"command":"test-streamType","history":{"enabled":true,"mode":"memory","streams":["stdout"]}}`)
+	createResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_create",
+		Capability: "session.create",
+		Payload:    createPayload,
+	})
+	if !createResp.OK {
+		t.Fatalf("session.create failed: %v", createResp.Error)
+	}
+	var createBody map[string]interface{}
+	if err := json.Unmarshal(createResp.Payload, &createBody); err != nil {
+		t.Fatalf("unmarshal create: %v", err)
+	}
+	sid2, ok := createBody["sessionId"].(string)
+	if !ok || sid2 == "" {
+		t.Fatal("expected sessionId in create response")
+	}
+
+	// Write with streamType (not legacy "stream") field
+	writePayload := json.RawMessage(`{"sessionId":"` + sid2 + `","streamType":"stdout","data":"written via streamType"}`)
+	writeResp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_write",
+		Capability: "stream.write",
+		Payload:    writePayload,
+	})
+	if !writeResp.OK {
+		t.Fatalf("stream.write failed: %v", writeResp.Error)
+	}
+	var writeBody map[string]interface{}
+	if err := json.Unmarshal(writeResp.Payload, &writeBody); err != nil {
+		t.Fatalf("unmarshal write: %v", err)
+	}
+	if written, ok := writeBody["written"].(float64); !ok || written == 0 {
+		t.Errorf("expected >0 written bytes, got %v", writeBody["written"])
+	}
+	if st, ok := writeBody["streamType"].(string); !ok || st != "stdout" {
+		t.Errorf("expected streamType 'stdout', got %v", writeBody["streamType"])
+	}
+
+	// Verify via replay that streamType-written data is in history
+	replay2Resp := sendAndRecvRequestID(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_replay2",
+		Capability: "stream.replay",
+		Payload:    json.RawMessage(`{"sessionId":"` + sid2 + `","streamType":"stdout"}`),
+		}, "req_replay2")
+	if !replay2Resp.OK {
+		t.Fatalf("stream.replay failed: %v", replay2Resp.Error)
+	}
+	var replay2Body map[string]interface{}
+	if err := json.Unmarshal(replay2Resp.Payload, &replay2Body); err != nil {
+		t.Fatalf("unmarshal replay2: %v", err)
+	}
+	events2, ok := replay2Body["events"].([]interface{})
+	if !ok {
+		t.Fatalf("expected events array, got %T", replay2Body["events"])
+	}
+	foundStreamType := false
+	for _, evt := range events2 {
+		evtMap, ok := evt.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if data, ok := evtMap["data"].(string); ok && strings.Contains(data, "written via streamType") {
+			foundStreamType = true
+			break
+		}
+	}
+	if !foundStreamType {
+		t.Error("expected 'written via streamType' in replayed history")
+	}
+}
+
 type mockPluginRegistry struct{}
 
 func (m *mockPluginRegistry) Get(id types.PluginID) (*dispatcher.PluginEntry, error) {
@@ -878,4 +1078,118 @@ func (m *mockTopology) Get(nodeID types.NodeID) (*dispatcher.NodeTarget, error) 
 type mockAuditLogger struct{}
 
 func (m *mockAuditLogger) Log(req *types.CapabilityRequest, allowed bool, detail string) {
+}
+
+// ---------------------------------------------------------------------------
+// Service Token E2E — real WS path
+// ---------------------------------------------------------------------------
+
+// testServerWithToken creates a server with a specific token for auth.
+func testServerWithToken(t *testing.T, token string) (*Server, *httptest.Server) {
+	t.Helper()
+
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	pm := process.NewManager(cr.PushChunk, cr.PushSessionEvent)
+	execDeps := &executor.Deps{
+		Sessions:   sessStore,
+		Processes:  pm,
+		ConnRoutes: cr,
+	}
+	execReg := executor.New(execDeps)
+
+	permChecker := permission.NewChecker(
+		&mockCapRegistry{},
+		&mockPolicyStore{},
+	)
+
+	audit := &mockAuditLogger{}
+	topo := &mockTopology{}
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(token),
+		&mockPluginRegistry{},
+		permChecker,
+		nil, /* planner */
+		execReg,
+		audit,
+		topo,
+		"node_local",
+	)
+
+	sv := New("", d, sessStore, cr, pm)
+	httpSrv := httptest.NewServer(sv.httpServer.Handler)
+	return sv, httpSrv
+}
+
+func TestWSServiceTokenE2E(t *testing.T) {
+	const validToken = "test-service-token-42"
+	_, srv := testServerWithToken(t, validToken)
+	defer srv.Close()
+
+	// Test 1: no token → UNAUTHENTICATED
+	conn := wsConnect(t, srv)
+	msg := &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_notoken",
+		Capability: "system.info",
+		ActorType:  "external",
+		ActorID:    "script",
+		// no ActorToken
+	}
+	resp := sendAndRecv(t, conn, msg)
+	if resp.OK {
+		t.Fatal("expected failure when no token is provided")
+	}
+	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeUnauthenticated {
+		t.Errorf("expected UNAUTHENTICATED, got code=%v msg=%v",
+			errCode(resp.Error), errMsg(resp.Error))
+	}
+	conn.Close()
+
+	// Test 2: wrong token → UNAUTHENTICATED
+	conn2 := wsConnect(t, srv)
+	msg2 := &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_badtoken",
+		Capability: "system.info",
+		ActorType:  "external",
+		ActorID:    "script",
+		ActorToken: "wrong-token",
+	}
+	resp2 := sendAndRecv(t, conn2, msg2)
+	if resp2.OK {
+		t.Fatal("expected failure when wrong token is provided")
+	}
+	if resp2.Error == nil || resp2.Error.Code != protocol.ErrCodeUnauthenticated {
+		t.Errorf("expected UNAUTHENTICATED for wrong token, got code=%v msg=%v",
+			errCode(resp2.Error), errMsg(resp2.Error))
+	}
+	conn2.Close()
+
+	// Test 3: valid token → OK
+	conn3 := wsConnect(t, srv)
+	msg3 := &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_oktoken",
+		Capability: "system.info",
+		ActorType:  "external",
+		ActorID:    "script",
+		ActorToken: validToken,
+	}
+	resp3 := sendAndRecv(t, conn3, msg3)
+	if !resp3.OK {
+		t.Fatalf("expected success with valid token, got: %v", resp3.Error)
+	}
+	conn3.Close()
+}
+
+func errCode(e *types.CoreError) string {
+	if e == nil { return "<nil>" }
+	return e.Code
+}
+
+func errMsg(e *types.CoreError) string {
+	if e == nil { return "<nil>" }
+	return e.Message
 }

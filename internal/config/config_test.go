@@ -478,4 +478,104 @@ func TestSaveProducesValidJSON(t *testing.T) {
 	if addr != ":1234" {
 		t.Errorf("core.listenAddr = %q, want %q", addr, ":1234")
 	}
+
+	// Verify revision was persisted.
+	rev, ok := decoded["_revision"]
+	if !ok {
+		t.Fatal("saved file missing _revision field")
+	}
+	revFloat, ok := rev.(float64)
+	if !ok {
+		t.Fatalf("_revision is not a number: %T", rev)
+	}
+	if int64(revFloat) < 1 {
+		t.Errorf("_revision = %v, want >= 1", revFloat)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Revision-based concurrency control
+// ---------------------------------------------------------------------------
+
+func TestSetWithRevisionOK(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(filepath.Join(dir, "config.json"))
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// First set bumps revision to 1.
+	if err := mgr.Set("core.listenAddr", ":9090"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// SetWithRevision with expectedRevision=1 should succeed.
+	if err := mgr.SetWithRevision("core.listenAddr", ":8080", 1); err != nil {
+		t.Fatalf("SetWithRevision: %v", err)
+	}
+
+	cfg := mgr.Get()
+	if cfg.Core.ListenAddr != ":8080" {
+		t.Errorf("ListenAddr = %q, want %q", cfg.Core.ListenAddr, ":8080")
+	}
+}
+
+func TestSetWithRevisionConflict(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(filepath.Join(dir, "config.json"))
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// First set bumps revision to 1.
+	if err := mgr.Set("core.listenAddr", ":9090"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Second set bumps revision to 2.
+	if err := mgr.Set("node.name", "v2"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Try SetWithRevision with expectedRevision=1 (stale) → should fail.
+	err := mgr.SetWithRevision("core.listenAddr", ":8080", 1)
+	if err == nil {
+		t.Fatal("expected ConfigConflictError, got nil")
+	}
+	conflict, ok := err.(*ConfigConflictError)
+	if !ok {
+		t.Fatalf("expected *ConfigConflictError, got %T: %v", err, err)
+	}
+	if conflict.ExpectedRevision != 1 {
+		t.Errorf("ExpectedRevision = %d, want 1", conflict.ExpectedRevision)
+	}
+	if conflict.ActualRevision != 2 {
+		t.Errorf("ActualRevision = %d, want 2", conflict.ActualRevision)
+	}
+}
+
+func TestSetWithRevisionZeroBypassesCheck(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(filepath.Join(dir, "config.json"))
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// expectedRevision=0 should bypass the check.
+	if err := mgr.SetWithRevision("core.listenAddr", ":7070", 0); err != nil {
+		t.Fatalf("SetWithRevision(0): %v", err)
+	}
+
+	// Second call with 0 should also work.
+	if err := mgr.SetWithRevision("node.name", "force-set", 0); err != nil {
+		t.Fatalf("SetWithRevision(0) again: %v", err)
+	}
+
+	cfg := mgr.Get()
+	if cfg.Core.ListenAddr != ":7070" {
+		t.Errorf("ListenAddr = %q, want %q", cfg.Core.ListenAddr, ":7070")
+	}
+	if cfg.Node.Name != "force-set" {
+		t.Errorf("Node.Name = %q, want %q", cfg.Node.Name, "force-set")
+	}
 }

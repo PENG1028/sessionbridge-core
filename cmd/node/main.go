@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/user/sessionnode/go-core/internal/auth"
 	"github.com/user/sessionnode/go-core/internal/config"
@@ -16,6 +17,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/permission"
 	"github.com/user/sessionnode/go-core/internal/plan"
+	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/server"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -98,6 +100,50 @@ func main() {
 	go topo.Start(topoCtx)
 	defer topoCancel()
 
+	// Plugin registry — discover manifests from disk.
+	// Start with configured dirs (or defaults), then always layer on
+	// SESSIONNODE_PLUGIN_DIRS (additive, not a fallback), then check for
+	// a local ./plugins/ directory (development mode).
+	pluginDirs := pluginmanifest.ScanDirs(cfg.Plugin.PluginDirs)
+	if env := os.Getenv("SESSIONNODE_PLUGIN_DIRS"); env != "" {
+		for _, dir := range strings.Split(env, string(os.PathListSeparator)) {
+			if trimmed := strings.TrimSpace(dir); trimmed != "" {
+				pluginDirs = append(pluginDirs, trimmed)
+			}
+		}
+	}
+	if localPlugins := filepath.Join(".", "plugins"); fileExists(localPlugins) {
+		pluginDirs = append(pluginDirs, localPlugins)
+	}
+	manifestReg := pluginmanifest.NewPluginRegistry(
+		pluginDirs,
+		cfg.Plugin.DisabledPlugins,
+	)
+	log.Printf("[startup] discovered %d plugin(s) from %d dir(s)",
+		len(manifestReg.ListPlugins()), len(pluginDirs))
+
+	// Build capability map from manifests, merging with hardcoded fallback.
+	caps := mergeCapMaps(
+		manifestReg.CapabilityMap(),
+		capMapFromAllPluginsCaps(permission.AllPluginsCaps),
+	)
+
+	// Permission checker.
+	permCaps := make(map[types.PluginID][]string, len(caps))
+	for pidStr, list := range caps {
+		permCaps[types.PluginID(pidStr)] = list
+	}
+	permChecker := permission.NewChecker(
+		permission.NewMapRegistry(permCaps),
+		permission.NewAllowAllPolicy(permCaps),
+	)
+
+	// Authenticator
+	authenticator := auth.NewTokenAuthenticator(token)
+
+	// Plugin registry for the dispatcher — built from manifest discovery + core.
+	dispPlugins := newDispPluginRegistry(manifestReg)
+
 	// Executor registry
 	execDeps := &executor.Deps{
 		Sessions:   sessStore,
@@ -107,32 +153,14 @@ func main() {
 		Config:     cfgMgr,
 		Nodes:      topo,
 		History:    historyStore,
+		Manifests:  manifestReg,
 	}
 	execReg := executor.New(execDeps)
-
-	// Permission checker — capability registry + allow-all policy v0
-	permChecker := permission.NewChecker(
-		permission.NewMapRegistry(permission.AllPluginsCaps),
-		permission.NewAllowAllPolicy(permission.AllPluginsCaps),
-	)
-
-	// Authenticator
-	authenticator := auth.NewTokenAuthenticator(token)
-
-	// Plugin registry — allow all known plugins
-	pluginReg := &simplePluginRegistry{
-		plugins: map[types.PluginID]*dispatcher.PluginEntry{
-			"shell":            {ID: "shell", Enabled: true},
-			"sessionnode-core": {ID: "sessionnode-core", Enabled: true},
-			"file-explorer":    {ID: "file-explorer", Enabled: true},
-			"session":          {ID: "session", Enabled: true},
-		},
-	}
 
 	// Dispatcher
 	d := dispatcher.New(
 		authenticator,
-		pluginReg,
+		dispPlugins,
 		permChecker,
 		plan.NewManager(plan.NewPlanStore(), plan.DefaultHighRiskCaps), /* planner */
 		execReg,
@@ -169,18 +197,63 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// --- Simple implementations ---
-
-type simplePluginRegistry struct {
-	plugins map[types.PluginID]*dispatcher.PluginEntry
+// fileExists returns true if the given path exists and is a directory.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
-func (r *simplePluginRegistry) Get(id types.PluginID) (*dispatcher.PluginEntry, error) {
-	p, ok := r.plugins[id]
+// --- Simple implementations ---
+
+// dispPluginRegistry implements dispatcher.PluginRegistry from the
+// production PluginRegistry (plus the built-in core plugin).
+type dispPluginRegistry struct {
+	entries map[types.PluginID]*dispatcher.PluginEntry
+}
+
+func newDispPluginRegistry(reg *pluginmanifest.PluginRegistry) *dispPluginRegistry {
+	r := &dispPluginRegistry{
+		entries: make(map[types.PluginID]*dispatcher.PluginEntry),
+	}
+	// Built-in core plugin is always present.
+	r.entries["sessionnode-core"] = &dispatcher.PluginEntry{ID: "sessionnode-core", Enabled: true}
+	// Discovered plugins.
+	for _, s := range reg.ListPlugins() {
+		r.entries[types.PluginID(s.ID)] = &dispatcher.PluginEntry{ID: types.PluginID(s.ID), Enabled: s.Enabled}
+	}
+	return r
+}
+
+func (r *dispPluginRegistry) Get(id types.PluginID) (*dispatcher.PluginEntry, error) {
+	p, ok := r.entries[id]
 	if !ok {
 		return nil, fmt.Errorf("plugin not found: %s", id)
 	}
 	return p, nil
+}
+
+// mergeCapMaps merges b into a (a takes priority on duplicate keys).
+func mergeCapMaps(a, b map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		if _, exists := out[k]; !exists {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// capMapFromAllPluginsCaps converts permission.AllPluginsCaps (which uses
+// typed PluginID keys) to a plain string map for merging with manifest data.
+func capMapFromAllPluginsCaps(src map[types.PluginID][]string) map[string][]string {
+	out := make(map[string][]string, len(src))
+	for pid, list := range src {
+		out[string(pid)] = list
+	}
+	return out
 }
 
 // dispatchAuditBridge converts dispatcher.AuditLogger calls to structured

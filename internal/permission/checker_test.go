@@ -305,6 +305,129 @@ func TestPluginPermissionError_ErrorInterface(t *testing.T) {
 	}
 }
 
+func TestCheck_TargetNodeAllowed(t *testing.T) {
+	c := newTestChecker(map[string]map[string]bool{
+		"test-plugin": {"fs.read": true},
+	}, map[string]map[string]*PermissionGrant{
+		"test-plugin": {
+			"fs.read": {
+				Mode: "allow",
+				Constraints: &types.PermissionConstraints{
+					TargetNodes: []string{"node-vps", "node-local"},
+				},
+			},
+		},
+	})
+
+	req := &types.CapabilityRequest{
+		PluginID:     "test-plugin",
+		Capability:   "fs.read",
+		TargetNodeID: "node-vps",
+	}
+	if err := c.Check(req); err != nil {
+		t.Errorf("expected success for node-vps, got: %v", err)
+	}
+}
+
+func TestCheck_TargetNodeDenied(t *testing.T) {
+	c := newTestChecker(map[string]map[string]bool{
+		"test-plugin": {"fs.read": true},
+	}, map[string]map[string]*PermissionGrant{
+		"test-plugin": {
+			"fs.read": {
+				Mode: "allow",
+				Constraints: &types.PermissionConstraints{
+					TargetNodes: []string{"node-vps"},
+				},
+			},
+		},
+	})
+
+	req := &types.CapabilityRequest{
+		PluginID:     "test-plugin",
+		Capability:   "fs.read",
+		TargetNodeID: "node-other",
+	}
+	err := c.Check(req)
+	if err == nil {
+		t.Fatal("expected error for disallowed target node, got nil")
+	}
+	if permErr, ok := err.(*PluginPermissionError); ok {
+		if permErr.Code != protocol.ErrCodeNodeNotAllowed {
+			t.Errorf("expected code %s, got %s", protocol.ErrCodeNodeNotAllowed, permErr.Code)
+		}
+	} else {
+		t.Errorf("expected *PluginPermissionError, got %T: %v", err, err)
+	}
+}
+
+func TestCheck_TargetNodeLocalRejectedWhenScopeSet(t *testing.T) {
+	c := newTestChecker(map[string]map[string]bool{
+		"test-plugin": {"fs.read": true},
+	}, map[string]map[string]*PermissionGrant{
+		"test-plugin": {
+			"fs.read": {
+				Mode: "allow",
+				Constraints: &types.PermissionConstraints{
+					TargetNodes: []string{"node-vps"},
+				},
+			},
+		},
+	})
+
+	// Empty TargetNodeID = local execution, but scope explicitly lists nodes.
+	req := &types.CapabilityRequest{
+		PluginID:   "test-plugin",
+		Capability: "fs.read",
+		// TargetNodeID empty = local
+	}
+	err := c.Check(req)
+	if err == nil {
+		t.Fatal("expected error for local execution with node-scoped grant, got nil")
+	}
+	if permErr, ok := err.(*PluginPermissionError); ok {
+		if permErr.Code != protocol.ErrCodeNodeNotAllowed {
+			t.Errorf("expected code %s, got %s", protocol.ErrCodeNodeNotAllowed, permErr.Code)
+		}
+	} else {
+		t.Errorf("expected *PluginPermissionError, got %T: %v", err, err)
+	}
+}
+
+func TestCheck_TargetNodeAnyWhenScopeEmpty(t *testing.T) {
+	c := newTestChecker(map[string]map[string]bool{
+		"test-plugin": {"fs.read": true},
+	}, map[string]map[string]*PermissionGrant{
+		"test-plugin": {
+			"fs.read": {
+				Mode: "allow",
+				Constraints: &types.PermissionConstraints{
+					// No TargetNodes = all nodes allowed
+				},
+			},
+		},
+	})
+
+	// Remote execution with any target should work.
+	req := &types.CapabilityRequest{
+		PluginID:     "test-plugin",
+		Capability:   "fs.read",
+		TargetNodeID: "any-node",
+	}
+	if err := c.Check(req); err != nil {
+		t.Errorf("expected success for unrestricted target, got: %v", err)
+	}
+
+	// Local execution should also work.
+	req2 := &types.CapabilityRequest{
+		PluginID:   "test-plugin",
+		Capability: "fs.read",
+	}
+	if err := c.Check(req2); err != nil {
+		t.Errorf("expected success for local execution without scope, got: %v", err)
+	}
+}
+
 // --- Helpers ---
 
 func newTestChecker(caps map[string]map[string]bool, grants map[string]map[string]*PermissionGrant) *Checker {

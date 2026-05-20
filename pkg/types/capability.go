@@ -19,6 +19,7 @@ type CapabilityRequest struct {
 	Payload      json.RawMessage  `json:"payload,omitempty"`      // deferred deserialization
 	Timestamp    int64            `json:"timestamp"`              // unix millis
 	PlanID       string           `json:"planId,omitempty"`       // approved plan ID for high-risk capabilities
+	WriteCh      chan<- []byte    `json:"-"`                      // connection's push channel for push routing (not serialized)
 }
 
 // CapabilityResponse is the universal response envelope for all capability calls.

@@ -612,6 +612,26 @@ func TestStreamWriteToStdinWithProcess(t *testing.T) {
 	}
 }
 
+func TestStreamWriteWithStreamType(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "process.spawn", map[string]interface{}{"command": "cat"})
+	sid := m["sessionId"].(string)
+	time.Sleep(100 * time.Millisecond)
+
+	// Use canonical "streamType" field instead of legacy "stream"
+	wm := execOK(t, r, "stream.write", map[string]string{
+		"sessionId":  sid,
+		"streamType": "stdin",
+		"data":       "hello streamType\n",
+	})
+	if wm["written"].(float64) == 0 {
+		t.Error("expected >0 bytes written")
+	}
+	if wm["streamType"].(string) != "stdin" {
+		t.Errorf("streamType = %v, want 'stdin'", wm["streamType"])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // process manager edge cases
 // ---------------------------------------------------------------------------
@@ -687,5 +707,48 @@ func TestProcessCleanup(t *testing.T) {
 	pm.Cleanup()
 	if pm.Count() != 0 {
 		t.Errorf("expected 0 after cleanup, got %d", pm.Count())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plugin management stubs
+// ---------------------------------------------------------------------------
+
+func TestPluginCheck_ReturnsOK(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "sessionnode-core"})
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want ok", m["status"])
+	}
+	if m["pluginId"] != "sessionnode-core" {
+		t.Errorf("pluginId = %v, want sessionnode-core", m["pluginId"])
+	}
+}
+
+func TestPluginCacheList_ReturnsEmpty(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "plugin.cache.list", map[string]string{"pluginId": "sessionnode-core"})
+	caches, ok := m["caches"].([]interface{})
+	if !ok {
+		t.Fatalf("caches is not an array: %T", m["caches"])
+	}
+	if len(caches) != 0 {
+		t.Errorf("expected empty caches, got %d", len(caches))
+	}
+}
+
+func TestPluginInstallPlan_ReturnsNotImplemented(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "plugin.install", map[string]string{"pluginId": "sessionnode-core"})
+	if m["status"] != "not_implemented" {
+		t.Errorf("status = %v, want not_implemented", m["status"])
+	}
+}
+
+func TestPluginCacheClear_ReturnsNotImplemented(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "plugin.cache.clear", map[string]string{"pluginId": "sessionnode-core"})
+	if m["status"] != "not_implemented" {
+		t.Errorf("status = %v, want not_implemented", m["status"])
 	}
 }

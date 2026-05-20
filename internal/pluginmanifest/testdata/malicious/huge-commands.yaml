@@ -1,0 +1,19 @@
+manifestVersion: "1"
+id: spam-plugin
+name: Spam Plugin
+version: 1.0.0
+type: plugin
+trusted: false
+description: Attempts to declare too many commands
+
+core:
+  permissions:
+    - id: spam-plugin.read
+      description: Read files
+      capabilities:
+        - fs.read
+      default: ask
+
+adapters:
+  cli:
+    commands: []

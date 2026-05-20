@@ -7,8 +7,9 @@ import (
 )
 
 type streamSubscribePayload struct {
-	SessionID string `json:"sessionId"`
-	Stream    string `json:"stream"` // "stdout", "stderr", "stdin"
+	SessionID  string `json:"sessionId"`
+	Stream     string `json:"stream"`     // legacy
+	StreamType string `json:"streamType"` // canonical — prefer over "stream"
 }
 
 func streamSubscribe(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
@@ -19,25 +20,41 @@ func streamSubscribe(req *types.CapabilityRequest, deps *Deps) (interface{}, err
 	if p.SessionID == "" {
 		return nil, fmt.Errorf("sessionId is required")
 	}
-	sess := deps.Sessions.Get(types.SessionID(p.SessionID))
+	// Accept both "streamType" (canonical) and "stream" (legacy)
+	stream := p.Stream
+	if p.StreamType != "" {
+		stream = p.StreamType
+	}
+	sid := types.SessionID(p.SessionID)
+	sess := deps.Sessions.Get(sid)
 	if sess == nil {
 		return nil, fmt.Errorf("session not found: %s", p.SessionID)
 	}
-	stream, ok := sess.Streams[p.Stream]
+	s, ok := sess.Streams[stream]
 	if !ok {
-		return nil, fmt.Errorf("unknown stream type: %s", p.Stream)
+		return nil, fmt.Errorf("unknown stream type: %s", stream)
 	}
+
+	// Register this connection's write channel for push routing.
+	// Without this, WS reconnect causes sessions to lose their push route
+	// because connRegistry unregisters all owned sessions on WS disconnect.
+	if req.WriteCh != nil {
+		deps.ConnRoutes.Register(sid, req.WriteCh)
+	}
+
 	return map[string]interface{}{
-		"sessionId": p.SessionID,
-		"stream":    p.Stream,
-		"data":      string(stream.Read()),
+		"sessionId":  p.SessionID,
+		"stream":     stream,
+		"streamType": stream,
+		"data":       string(s.Read()),
 	}, nil
 }
 
 type streamWritePayload struct {
-	SessionID string `json:"sessionId"`
-	Stream    string `json:"stream"`
-	Data      string `json:"data"`
+	SessionID  string `json:"sessionId"`
+	Stream     string `json:"stream"`     // legacy
+	StreamType string `json:"streamType"` // canonical — prefer over "stream"
+	Data       string `json:"data"`
 }
 
 func streamWrite(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
@@ -49,17 +66,24 @@ func streamWrite(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 		return nil, fmt.Errorf("sessionId is required")
 	}
 
+	// Accept both "streamType" (canonical) and "stream" (legacy)
+	stream := p.Stream
+	if p.StreamType != "" {
+		stream = p.StreamType
+	}
+
 	// Route stdin writes to the process's stdin pipe if a process exists.
-	if p.Stream == "stdin" {
+	if stream == "stdin" {
 		proc := deps.Processes.Get(types.SessionID(p.SessionID))
 		if proc != nil && proc.State == "running" {
 			if err := deps.Processes.WriteStdin(types.SessionID(p.SessionID), p.Data); err != nil {
 				return nil, fmt.Errorf("stdin write error: %w", err)
 			}
 			return map[string]interface{}{
-				"sessionId": p.SessionID,
-				"stream":    p.Stream,
-				"written":   len(p.Data),
+				"sessionId":  p.SessionID,
+				"stream":     stream,
+				"streamType": stream,
+				"written":    len(p.Data),
 			}, nil
 		}
 		// No running process: write to session store buffer as fallback.
@@ -69,21 +93,22 @@ func streamWrite(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 	if sess == nil {
 		return nil, fmt.Errorf("session not found: %s", p.SessionID)
 	}
-	stream, ok := sess.Streams[p.Stream]
+	sessStream, ok := sess.Streams[stream]
 	if !ok {
-		return nil, fmt.Errorf("unknown stream type: %s", p.Stream)
+		return nil, fmt.Errorf("unknown stream type: %s", stream)
 	}
-	stream.Write([]byte(p.Data))
+	sessStream.Write([]byte(p.Data))
 
 	// Record into history for replay
 	if deps.History != nil {
-		deps.History.Record(types.SessionID(p.SessionID), p.Stream, 0, p.Data)
+		deps.History.Record(types.SessionID(p.SessionID), stream, 0, p.Data)
 	}
 
 	return map[string]interface{}{
-		"sessionId": p.SessionID,
-		"stream":    p.Stream,
-		"written":   len(p.Data),
+		"sessionId":  p.SessionID,
+		"stream":     stream,
+		"streamType": stream,
+		"written":    len(p.Data),
 	}, nil
 }
 

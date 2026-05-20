@@ -6,6 +6,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/notify"
+	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
@@ -39,6 +40,15 @@ type Deps struct {
 	Config     *config.Manager
 	Nodes      NodeLister
 	History    *history.Store
+	Manifests  ManifestLoader
+}
+
+// ManifestLoader provides plugin manifest data to capability handlers.
+// Phase 1: may be nil — handlers degrade gracefully.
+type ManifestLoader interface {
+	LoadManifest(pluginID string) (*pluginmanifest.Manifest, error)
+	ListPlugins() []pluginmanifest.PluginSummary
+	PluginEnabled(pluginID string) bool
 }
 
 // Registry maps capability names to handler functions.
@@ -103,6 +113,11 @@ func (r *Registry) registerDefaults() {
 
 	r.Register("plugin.list", pluginList)
 	r.Register("plugin.info", pluginInfo)
+	r.Register("plugin.check", pluginCheck)
+	r.Register("plugin.install", pluginInstallPlan)
+	r.Register("plugin.cache.list", pluginCacheList)
+	r.Register("plugin.cache.clear", pluginCacheClear)
+	r.Register("plugin.files.list", pluginFilesList)
 
 	r.Register("node.list", nodeList)
 	r.Register("node.info", nodeInfo)

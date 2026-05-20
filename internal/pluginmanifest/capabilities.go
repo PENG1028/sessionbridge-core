@@ -1,0 +1,167 @@
+package pluginmanifest
+
+// KnownCapabilities is the set of all capabilities known to Core.
+var KnownCapabilities = map[string]bool{
+	// Node
+	"node.list":      true,
+	"node.info":      true,
+	"node.health":    true,
+	"node.disconnect": true,
+
+	// Session
+	"session.create": true,
+	"session.list":   true,
+	"session.get":    true,
+	"session.stop":   true,
+	"session.events": true,
+	"session.replay": true,
+
+	// Process
+	"process.spawn":  true,
+	"process.kill":   true,
+	"process.signal": true,
+	"process.resize": true,
+	"process.status": true,
+	"process.list":   true,
+
+	// Stream
+	"stream.subscribe": true,
+	"stream.write":     true,
+	"stream.replay":    true,
+	"stream.tail":      true,
+	"stream.list":      true,
+
+	// FS
+	"fs.list":   true,
+	"fs.read":   true,
+	"fs.write":  true,
+	"fs.delete": true,
+	"fs.stat":   true,
+	"fs.mkdir":  true,
+	"fs.rename": true,
+
+	// Env
+	"env.info":        true,
+	"env.checkBinary": true,
+	"env.which":       true,
+	"env.home":        true,
+	"env.cwd":         true,
+	"env.vars":        true,
+	"env.get":         true,
+	"env.set":         true,
+	"env.list":        true,
+	"env.unset":       true,
+
+	// Config
+	"config.get":  true,
+	"config.set":  true,
+	"config.list": true,
+	"config.watch": true,
+
+	// Logs
+	"logs.tail":   true,
+	"logs.query":  true,
+	"logs.export": true,
+
+	// Notify / Approval
+	"notify.send":    true,
+	"notify.request": true,
+	"notify.respond": true,
+
+	// Plugin management
+	"plugin.list":              true,
+	"plugin.get":              true,
+	"plugin.status":           true,
+	"plugin.enable":           true,
+	"plugin.disable":          true,
+	"plugin.check":            true,
+	"plugin.install.plan":     true,
+	"plugin.install.execute":  true,
+	"plugin.uninstall":        true,
+	"plugin.files.list":       true,
+	"plugin.files.register":   true,
+	"plugin.cache.list":       true,
+	"plugin.cache.info":       true,
+	"plugin.cache.clear":      true,
+	"plugin.cache.clear.plan": true,
+	"plugin.cache.clear.execute": true,
+	"plugin.permissions.list": true,
+	"plugin.permissions.grant": true,
+	"plugin.permissions.revoke": true,
+	"plugin.config.get":       true,
+	"plugin.config.set":       true,
+	"plugin.config.schema":    true,
+	"plugin.history":          true,
+
+	// System
+	"system.info": true,
+
+	// Session history
+	"session.history.getPolicy":  true,
+	"session.history.setPolicy":  true,
+	"session.history.stats":      true,
+	"session.history.list":       true,
+	"session.history.clear.plan": true,
+	"session.history.clear.execute": true,
+}
+
+// DangerousCapabilities are capabilities that must NOT have default: allow
+// unless the plugin is trusted AND allowDangerousDefaults is explicitly set.
+var DangerousCapabilities = map[string]bool{
+	"process.spawn":              true,
+	"stream.write":               true,
+	"fs.write":                   true,
+	"fs.delete":                  true,
+	"plugin.install.execute":      true,
+	"plugin.cache.clear.execute":  true,
+	"config.set":                 true,
+	"permission.grant":           true,
+	"plugin.permissions.grant":   true,
+	"node.disconnect":            true,
+}
+
+// PermissionDefault values
+const (
+	DefaultAsk   = "ask"
+	DefaultDeny  = "deny"
+	DefaultAllow = "allow"
+)
+
+// ValidPermissionDefaults lists accepted default values.
+var ValidPermissionDefaults = map[string]bool{
+	DefaultAsk:   true,
+	DefaultDeny:  true,
+	DefaultAllow: true,
+}
+
+// ReservedPluginIDs are IDs that no plugin may use.
+var ReservedPluginIDs = map[string]bool{
+	"system-ui":        true,
+	"sessionnode-core": true,
+}
+
+// kebabCaseRegex is a simple kebab-case validator.
+func isKebabCase(s string) bool {
+	if len(s) < 1 {
+		return false
+	}
+	for i, r := range s {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' && i > 0 && i < len(s)-1 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// isNamespacePrefix checks if id starts with the pluginID + ".".
+func isNamespacePrefix(pluginID, id string) bool {
+	prefix := pluginID + "."
+	return len(id) > len(prefix) && id[:len(prefix)] == prefix
+}
