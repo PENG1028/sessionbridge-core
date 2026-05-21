@@ -1614,6 +1614,49 @@ func TestPluginConfigSet_Conflict(t *testing.T) {
 	}
 }
 
+func TestConfigList_ReturnsWrappedEntries(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	m := execOK(t, r, "config.list", nil)
+	entries, ok := m["configs"].([]interface{})
+	if !ok {
+		t.Fatalf("configs = %T, want []interface{}", m["configs"])
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected config entries")
+	}
+	for _, raw := range entries {
+		entry := raw.(map[string]interface{})
+		if entry["key"] == "core.auth.adminToken" {
+			t.Fatalf("admin token should not be listed")
+		}
+	}
+}
+
+func TestConfigSetGetReset(t *testing.T) {
+	deps := fullPluginDeps(t)
+	r := New(deps)
+
+	set := execOK(t, r, "config.set", map[string]interface{}{
+		"key":   "node.name",
+		"value": "custom-node",
+	})
+	if set["value"] != "custom-node" {
+		t.Fatalf("config.set value = %v, want custom-node", set["value"])
+	}
+
+	got := execOK(t, r, "config.get", map[string]string{"key": "node.name"})
+	if got["value"] != "custom-node" {
+		t.Fatalf("config.get value = %v, want custom-node", got["value"])
+	}
+
+	reset := execOK(t, r, "config.reset", map[string]string{"key": "node.name"})
+	if reset["value"] == "custom-node" {
+		t.Fatal("config.reset did not restore default node.name")
+	}
+}
+
 // TestPluginPermissionsGrant verifies granting a permission.
 func TestPluginPermissionsGrant(t *testing.T) {
 	deps := fullPluginDeps(t)
@@ -3365,9 +3408,9 @@ func TestPluginPermissionsGrant_CorrectParams(t *testing.T) {
 // TestPluginPermissionsGrant_WithPayloadPlanId verifies that
 // plugin.permissions.grant accepts planId in the payload (not only at
 // the request level). This is the UI re-call path after approval:
-//   1. First grant → requires_approval + planId
-//   2. notify.request + notify.respond (approve)
-//   3. Second grant with payload.planId → ok
+//  1. First grant → requires_approval + planId
+//  2. notify.request + notify.respond (approve)
+//  3. Second grant with payload.planId → ok
 func TestPluginPermissionsGrant_WithPayloadPlanId(t *testing.T) {
 	deps := planDeps(t)
 	r := New(deps)

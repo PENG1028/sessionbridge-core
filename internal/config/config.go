@@ -40,8 +40,8 @@ type TopologyConfig struct {
 // PeerConfig defines a single peer node that this instance should connect to.
 type PeerConfig struct {
 	ID      string   `json:"id"`
-	Address string   `json:"address"`          // "host:port"
-	Tags    []string `json:"tags,omitempty"`   // e.g. ["local"]
+	Address string   `json:"address"`        // "host:port"
+	Tags    []string `json:"tags,omitempty"` // e.g. ["local"]
 }
 
 // CoreConfig holds server-level settings.
@@ -80,9 +80,9 @@ type NodeConfig struct {
 
 // PluginConfig holds plugin-level settings.
 type PluginConfig struct {
-	PluginDirs      []string                                `json:"pluginDirs,omitempty"`
-	DisabledPlugins []string                                `json:"disabledPlugins,omitempty"`
-	Permissions     map[string]map[string]PermissionGrant   `json:"permissions,omitempty"`
+	PluginDirs      []string                              `json:"pluginDirs,omitempty"`
+	DisabledPlugins []string                              `json:"disabledPlugins,omitempty"`
+	Permissions     map[string]map[string]PermissionGrant `json:"permissions,omitempty"`
 }
 
 // PermissionGrant describes how a capability is gated for a plugin.
@@ -258,6 +258,51 @@ func (m *Manager) SetWithRevision(key string, value interface{}, expectedRevisio
 	return m.saveLocked()
 }
 
+// Value returns a copy of a single config value addressed by dot notation.
+func (m *Manager) Value(key string) (interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	parts := strings.Split(key, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return nil, fmt.Errorf("config: empty key")
+	}
+	return getField(reflect.ValueOf(m.config), parts)
+}
+
+// ResetWithRevision resets a config key to its default value.
+func (m *Manager) ResetWithRevision(key string, expectedRevision int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if expectedRevision != 0 && m.config.Revision != expectedRevision {
+		return &ConfigConflictError{
+			ExpectedRevision: expectedRevision,
+			ActualRevision:   m.config.Revision,
+		}
+	}
+
+	parts := strings.Split(key, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return fmt.Errorf("config: empty key")
+	}
+
+	value, err := getField(reflect.ValueOf(defaultConfig()), parts)
+	if err != nil {
+		return fmt.Errorf("config: reset %q: %w", key, err)
+	}
+
+	v := reflect.ValueOf(&m.config).Elem()
+	if err := setField(v, parts, value); err != nil {
+		return fmt.Errorf("config: reset %q: %w", key, err)
+	}
+
+	m.config.Revision++
+	log.Printf("[config] reset %s (rev %d)", key, m.config.Revision)
+	m.config = applyDefaults(m.config)
+	return m.saveLocked()
+}
+
 // saveLocked writes m.config to m.path.  The caller must hold m.mu.
 func (m *Manager) saveLocked() error {
 	dir := filepath.Dir(m.path)
@@ -274,6 +319,41 @@ func (m *Manager) saveLocked() error {
 		return fmt.Errorf("write config %s: %w", m.path, err)
 	}
 	return nil
+}
+
+func getField(v reflect.Value, parts []string) (interface{}, error) {
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil, fmt.Errorf("nil pointer at %q", parts[0])
+		}
+		v = v.Elem()
+	}
+
+	part := parts[0]
+	rest := parts[1:]
+
+	switch v.Kind() {
+	case reflect.Struct:
+		fv := fieldByJSONTag(v, part)
+		if !fv.IsValid() {
+			return nil, fmt.Errorf("unknown field %q", part)
+		}
+		if len(rest) == 0 {
+			return fv.Interface(), nil
+		}
+		return getField(fv, rest)
+	case reflect.Map:
+		value := v.MapIndex(reflect.ValueOf(part))
+		if !value.IsValid() {
+			return nil, fmt.Errorf("unknown key %q", part)
+		}
+		if len(rest) == 0 {
+			return value.Interface(), nil
+		}
+		return getField(value, rest)
+	default:
+		return nil, fmt.Errorf("cannot navigate into kind %s at %q", v.Kind(), part)
+	}
 }
 
 // ---------------------------------------------------------------------------

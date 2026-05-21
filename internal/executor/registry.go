@@ -142,6 +142,11 @@ func (r *Registry) registerDefaults() {
 	r.Register("env.list", envList)
 	r.Register("env.unset", envUnset)
 
+	r.Register("config.list", configList)
+	r.Register("config.get", configGet)
+	r.Register("config.set", configSet)
+	r.Register("config.reset", configReset)
+
 	r.Register("system.info", systemInfo)
 
 	r.Register("plugin.list", pluginList)

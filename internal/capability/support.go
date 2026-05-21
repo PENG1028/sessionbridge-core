@@ -14,11 +14,11 @@ const (
 
 // CapabilitySupport is the result of checking a capability against a platform.
 type CapabilitySupport struct {
-	Capability string                `json:"capability"`
-	Supported  bool                  `json:"supported"`
-	Level      SupportLevel          `json:"level"`
-	Reason     string                `json:"reason"`
-	Detail     string                `json:"detail,omitempty"`
+	Capability string                   `json:"capability"`
+	Supported  bool                     `json:"supported"`
+	Level      SupportLevel             `json:"level"`
+	Reason     string                   `json:"reason"`
+	Detail     string                   `json:"detail,omitempty"`
 	Platform   platform.RuntimePlatform `json:"platform"`
 }
 
@@ -83,38 +83,42 @@ var Matrix = map[string]map[string]platformRule{
 	"fs.stat":   desktopFull,
 
 	// ── env family ──
-	"env.get":        desktopFull,
-	"env.set":        desktopFull,
-	"env.list":       desktopFull,
-	"env.unset":      desktopFull,
+	"env.get":         desktopFull,
+	"env.set":         desktopFull,
+	"env.list":        desktopFull,
+	"env.unset":       desktopFull,
 	"env.checkBinary": desktopFull,
-	"env.which":      desktopFull,
-	"env.home":       desktopFull,
-	"env.cwd":        desktopFull,
+	"env.which":       desktopFull,
+	"env.home":        desktopFull,
+	"env.cwd":         desktopFull,
 
 	// ── plugin family ──
-	"plugin.check":            desktopFull,
+	"plugin.check":              desktopFull,
 	"plugin.permissions.check":  desktopFull,
 	"plugin.permissions.grant":  desktopFull,
 	"plugin.permissions.revoke": desktopFull,
-	"plugin.config.get":       desktopFull,
-	"plugin.config.set":       desktopFull,
-	"plugin.cache.get":        desktopFull,
-	"plugin.cache.set":        desktopFull,
-	"plugin.cache.clear":      desktopFull,
-	"plugin.history":          desktopFull,
+	"plugin.config.get":         desktopFull,
+	"plugin.config.set":         desktopFull,
+	"plugin.cache.get":          desktopFull,
+	"plugin.cache.set":          desktopFull,
+	"plugin.cache.clear":        desktopFull,
+	"plugin.history":            desktopFull,
 
 	// ── run family ──
-	"run.create":      desktopFull,
-	"run.list":        desktopFull,
-	"run.info":        desktopFull,
-	"run.stop":        desktopFull,
+	"run.create":       desktopFull,
+	"run.list":         desktopFull,
+	"run.info":         desktopFull,
+	"run.stop":         desktopFull,
 	"run.updatePolicy": desktopFull,
 
 	// ── system family ──
-	"system.info": desktopFull,
-	"node.info":   desktopFull,
-	"node.list":   desktopFull,
+	"system.info":  desktopFull,
+	"node.info":    desktopFull,
+	"node.list":    desktopFull,
+	"config.get":   desktopFull,
+	"config.list":  desktopFull,
+	"config.set":   desktopFull,
+	"config.reset": desktopFull,
 
 	// ── network family ──
 	"network.connect": desktopFull,
@@ -132,11 +136,11 @@ var Matrix = map[string]map[string]platformRule{
 	},
 
 	// ── peer management family ──
-	"node.peer.list":       desktopFull,
-	"node.peer.info":       desktopFull,
-	"node.peer.reconnect":  desktopFull,
-	"node.peer.disconnect": desktopFull,
-	"node.peer.revoke":     desktopFull,
+	"node.peer.list":          desktopFull,
+	"node.peer.info":          desktopFull,
+	"node.peer.reconnect":     desktopFull,
+	"node.peer.disconnect":    desktopFull,
+	"node.peer.revoke":        desktopFull,
 	"node.reachability.check": desktopFull,
 
 	// ── node identity & invite family ──
