@@ -182,6 +182,8 @@ func (r *Registry) registerDefaults() {
 	r.Register("notify.request", notifyRequest)
 	r.Register("notify.respond", notifyRespond)
 
+	r.Register("approval.list", approvalList)
+
 	// History & Replay
 	r.Register("session.history.getPolicy", historyGetPolicy)
 	r.Register("session.history.setPolicy", historySetPolicy)

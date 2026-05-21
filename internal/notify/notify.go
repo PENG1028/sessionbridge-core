@@ -232,6 +232,38 @@ func (m *Manager) GetApproval(requestID types.RequestID) *ApprovalRequest {
 	return m.approvals[requestID]
 }
 
+// ListApprovals returns all pending (unresponded) approval requests.
+func (m *Manager) ListApprovals() map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	items := make([]interface{}, 0)
+	for _, apr := range m.approvals {
+		if apr.Responded {
+			continue
+		}
+		status := "pending"
+		if apr.Responded && apr.Response != nil {
+			status = apr.Response.Action
+		}
+		items = append(items, map[string]interface{}{
+			"requestId": string(apr.RequestID),
+			"pluginId":  string(apr.PluginID),
+			"title":     apr.Title,
+			"body":      apr.Body,
+			"detail":    apr.Detail,
+			"actions":   apr.Actions,
+			"status":    status,
+			"createdAt": apr.CreatedAt,
+			"planId":    apr.PlanID,
+			"expiresAt": apr.ExpiresAt.UnixMilli(),
+		})
+	}
+	return map[string]interface{}{
+		"approvals": items,
+	}
+}
+
 // WaitForResponse blocks until the approval is responded to or times out.
 func (a *ApprovalRequest) WaitForResponse() *ApprovalResponse {
 	<-a.done

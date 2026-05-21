@@ -74,6 +74,7 @@ var KnownCapabilities = map[string]bool{
 	"notify.send":    true,
 	"notify.request": true,
 	"notify.respond": true,
+	"approval.list":  true,
 
 	// Plugin management
 	"plugin.list":                 true,

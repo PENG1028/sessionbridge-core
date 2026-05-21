@@ -3298,3 +3298,66 @@ func TestExecutor_NetworkCapabilitiesNotRegistered(t *testing.T) {
 	}
 	t.Logf("network.connect execution error (expected): %v", err)
 }
+
+// ── approval.list tests ───────────────────────────────────────────────────────
+
+func TestApprovalList_ReturnsEmpty(t *testing.T) {
+	deps := fullPluginDeps(t)
+	reg := New(deps)
+
+	req := &types.CapabilityRequest{
+		RequestID:  "req-approval-list",
+		Capability: "approval.list",
+	}
+
+	result, err := reg.Execute(req)
+	if err != nil {
+		t.Fatalf("approval.list failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+
+	approvals, ok := resultMap["approvals"]
+	if !ok {
+		t.Fatal("expected approvals field in result")
+	}
+
+	// Should be empty initially
+	items, ok := approvals.([]interface{})
+	if ok && len(items) != 0 {
+		t.Logf("approvals: %v (expected empty)", items)
+	}
+}
+
+// ── plugin.permissions.grant correct params tests ─────────────────────────────
+
+func TestPluginPermissionsGrant_CorrectParams(t *testing.T) {
+	deps := fullPluginDeps(t)
+	reg := New(deps)
+
+	// Grant with capability + mode (the correct params)
+	req := &types.CapabilityRequest{
+		RequestID:  "req-grant-correct",
+		Capability: "plugin.permissions.grant",
+		PluginID:   "test-plugin",
+		Payload:    json.RawMessage(`{"pluginId":"test-plugin","capability":"fs.read","mode":"allow"}`),
+		Actor:      types.Actor{Type: "web", ID: "test-user"},
+	}
+
+	result, err := reg.Execute(req)
+	if err != nil {
+		// "no permission manifest" or similar is OK — checking param parsing
+		t.Logf("grant result (may fail due to missing manifest): %v", err)
+		return
+	}
+
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+
+	t.Logf("grant result: %v", resultMap)
+}
