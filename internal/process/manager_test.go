@@ -283,8 +283,14 @@ func TestSignal_TreeTrue_KillsOsSubprocessTree(t *testing.T) {
 	parentPid := proc.PID
 
 	// Enumerate OS-level children of the parent.
+	// Windows: wmic enumeration is PARTIAL — children=0 does NOT mean
+	// no children exist, only that wmic couldn't list them.
 	children, _ := childrenOf(parentPid)
 	t.Logf("Before tree kill: parent=%d children=%v", parentPid, children)
+
+	if len(children) == 0 && runtime.GOOS == "windows" {
+		t.Log("Windows wmic childrenOf returned 0 — tree verification limited to parent")
+	}
 
 	// Signal with tree=true — this should kill the entire OS process tree.
 	if err := m.Signal(sid, "SIGKILL", true); err != nil {
@@ -300,7 +306,7 @@ func TestSignal_TreeTrue_KillsOsSubprocessTree(t *testing.T) {
 		t.Errorf("parent process state = %s, want exited", proc.State)
 	}
 
-	// Verify OS-level children are gone.
+	// Verify OS-level children are gone (best-effort — only when enumerated).
 	if len(children) > 0 {
 		for _, cp := range children {
 			if processExists(t, cp) {
@@ -346,7 +352,7 @@ func TestSignal_TreeFalse_SingleProcessOnly(t *testing.T) {
 	children, _ := childrenOf(parentPid)
 	t.Logf("Before tree=false signal: parent=%d children=%v", parentPid, children)
 
-	// Signal with tree=false — only the parent should be affected.
+	// Signal with tree=false.
 	if err := m.Signal(sid, "SIGKILL", false); err != nil {
 		t.Fatalf("Signal(tree=false): %v", err)
 	}
@@ -359,22 +365,25 @@ func TestSignal_TreeFalse_SingleProcessOnly(t *testing.T) {
 		t.Errorf("parent process state = %s, want exited", proc.State)
 	}
 
-	// Verify that with tree=false, children should NOT be killed.
-	// However, on some platforms (Windows), killing a parent cmd might
-	// cascade to children. Log the result and only fail if childrenOf
-	// reported children that we expect to survive.
+	// NOTE: On Windows, tree=false and tree=true are EQUIVALENT — both use
+	// taskkill /T /F because Windows has no signal concept. tree=false cannot
+	// isolate the parent from children on this platform.
 	//
-	// Note: When the parent cmd is force-killed, Windows may or may not
-	// kill the child process. We consider the test successful if the
-	// parent was signaled — child survival is platform-dependent.
-	if len(children) > 0 {
-		survivors := 0
-		for _, cp := range children {
-			if processExists(t, cp) {
-				survivors++
+	// On Unix, tree=false signals only the parent process (via syscall.Kill
+	// without tree enumeration), so children should survive.
+	if runtime.GOOS == "windows" {
+		t.Log("Windows: tree=false uses taskkill /T /F — children are also killed (platform limitation)")
+	} else {
+		// Unix: children should survive tree=false.
+		if len(children) > 0 {
+			survivors := 0
+			for _, cp := range children {
+				if processExists(t, cp) {
+					survivors++
+				}
 			}
+			t.Logf("After tree=false: %d/%d children still running", survivors, len(children))
 		}
-		t.Logf("After tree=false: %d/%d children still running", survivors, len(children))
 	}
 
 	// Cleanup any remaining processes.

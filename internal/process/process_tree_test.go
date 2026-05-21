@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+// waitTimeout waits for a command to exit with a timeout.
+// If the timeout expires, the process is killed.
+func waitTimeout(cmd *exec.Cmd, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		cmd.Process.Kill()
+		<-done
+	}
+}
+
 // processExists checks whether a process with the given PID currently exists.
 func processExists(t *testing.T, pid int) bool {
 	t.Helper()
@@ -46,7 +62,7 @@ func TestChildrenOf_ReturnsPIDs(t *testing.T) {
 	parentPid := parent.Process.Pid
 	defer func() {
 		killProcessTree(parentPid, "SIGKILL")
-		parent.Wait()
+		waitTimeout(parent, 5*time.Second)
 	}()
 
 	time.Sleep(2 * time.Second)
@@ -56,7 +72,10 @@ func TestChildrenOf_ReturnsPIDs(t *testing.T) {
 		t.Fatalf("childrenOf(%d): %v", parentPid, err)
 	}
 	if len(children) == 0 {
-		t.Logf("childrenOf(%d) returned 0 children - pgrep/wmic may be unavailable or child not a direct child", parentPid)
+		if runtime.GOOS == "windows" {
+			t.Skip("childrenOf returned 0 on Windows — wmic enumeration is PARTIAL, cannot verify child tracking")
+		}
+		t.Logf("childrenOf(%d) returned 0 children — pgrep may be unavailable", parentPid)
 	} else {
 		t.Logf("childrenOf(%d) found %d children: %v", parentPid, len(children), children)
 		for _, c := range children {
@@ -81,7 +100,7 @@ func TestDescendantsOf_Recursive(t *testing.T) {
 	parentPid := parent.Process.Pid
 	defer func() {
 		killProcessTree(parentPid, "SIGKILL")
-		parent.Wait()
+		waitTimeout(parent, 5*time.Second)
 	}()
 
 	time.Sleep(3 * time.Second)
@@ -119,12 +138,19 @@ func TestKillProcessTree_DirectChild(t *testing.T) {
 	children, _ := childrenOf(parentPid)
 	t.Logf("Before kill: parent=%d children=%v", parentPid, children)
 
+	if len(children) == 0 && runtime.GOOS == "windows" {
+		// Windows: wmic enumeration is PARTIAL. killProcessTree uses
+		// taskkill /T /F which operates at kernel level — the tree IS
+		// killed even though we couldn't enumerate it.
+		t.Log("childrenOf returned 0 — wmic partial; verifying killProcessTree on parent only")
+	}
+
 	if err := killProcessTree(parentPid, "SIGKILL"); err != nil {
 		t.Fatalf("killProcessTree(%d): %v", parentPid, err)
 	}
 
 	time.Sleep(2 * time.Second)
-	parent.Wait()
+	waitTimeout(parent, 5*time.Second)
 
 	if len(children) > 0 {
 		for _, cp := range children {
@@ -144,7 +170,7 @@ func TestKillProcessTree_NoChildren(t *testing.T) {
 	pid := c.Process.Pid
 	defer func() {
 		killProcessTree(pid, "SIGKILL")
-		c.Wait()
+		waitTimeout(c, 5*time.Second)
 	}()
 
 	time.Sleep(1 * time.Second)
@@ -158,7 +184,7 @@ func TestKillProcessTree_NoChildren(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	c.Wait()
+	waitTimeout(c, 5*time.Second)
 }
 
 func TestKillProcessTree_AlreadyExited(t *testing.T) {
@@ -206,7 +232,7 @@ func TestKillProcessTree_SIGTERM(t *testing.T) {
 	pid := c.Process.Pid
 	defer func() {
 		killProcessTree(pid, "SIGKILL")
-		c.Wait()
+		waitTimeout(c, 5*time.Second)
 	}()
 
 	time.Sleep(1 * time.Second)
@@ -220,7 +246,7 @@ func TestKillProcessTree_SIGTERM(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	c.Wait()
+	waitTimeout(c, 5*time.Second)
 }
 
 func TestKillProcessTree_SIGINT(t *testing.T) {
@@ -232,7 +258,7 @@ func TestKillProcessTree_SIGINT(t *testing.T) {
 	pid := c.Process.Pid
 	defer func() {
 		killProcessTree(pid, "SIGKILL")
-		c.Wait()
+		waitTimeout(c, 5*time.Second)
 	}()
 
 	time.Sleep(1 * time.Second)
@@ -246,7 +272,7 @@ func TestKillProcessTree_SIGINT(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second)
-	c.Wait()
+	waitTimeout(c, 5*time.Second)
 }
 
 // singleLongProcess returns a command that runs for about 30 seconds.

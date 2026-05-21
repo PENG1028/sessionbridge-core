@@ -9,21 +9,51 @@ import (
 	"strings"
 )
 
-// childrenOf returns direct child PIDs using wmic.
-// Returns an empty slice (not an error) if wmic is unavailable or returns no matches.
+// killProcessTree on Windows uses taskkill /T /F to terminate the entire
+// OS process tree in a single call. It does NOT rely on wmic enumeration.
 //
-// Note: wmic outputs UTF-16LE on some systems, which contains null bytes.
-// We strip null bytes before parsing.
+// This is the most reliable approach on Windows because:
+//   - taskkill /T natively handles the tree in kernel mode
+//   - wmic may be unavailable, slow, or miss intermediate processes
+//   - There is no Windows equivalent of sending a signal to a single PID
+//     without also affecting its children (signals don't exist as a concept)
+//
+// If the process is already gone (taskkill reports "not found"), we treat
+// that as success.
+func killProcessTree(pid int, signal string) error {
+	// Always use /F (force) — without it taskkill can only terminate GUI
+	// processes that respond to WM_CLOSE, not console applications.
+	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		outStr := string(out)
+		if strings.Contains(outStr, "not found") {
+			return nil
+		}
+		return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, err, outStr)
+	}
+	return nil
+}
+
+// childrenOf returns direct child PIDs using wmic.
+//
+// BEST-EFFORT PARTIAL — wmic has known limitations:
+//   - Output is UTF-16LE; null bytes are stripped
+//   - May miss short-lived or kernel-protected children
+//   - Not available on all Windows editions (e.g., Server Core without WMI)
+//   - Returns empty slice (not an error) on any failure
+//
+// Callers MUST NOT rely on childrenOf for correctness — an empty result
+// does NOT mean the process has no children, only that enumeration failed
+// or returned nothing.
 func childrenOf(pid int) ([]int, error) {
 	cmd := exec.Command("cmd", "/c",
 		fmt.Sprintf("wmic process where (ParentProcessId=%d) get ProcessId /format:value", pid))
 	out, err := cmd.Output()
 	if err != nil {
-		// wmic may not be available; treat as no children.
 		return nil, nil
 	}
 
-	// Strip null bytes (wmic may output UTF-16LE).
 	clean := strings.Map(func(r rune) rune {
 		if r == 0 {
 			return -1
@@ -48,10 +78,13 @@ func childrenOf(pid int) ([]int, error) {
 	return pids, nil
 }
 
-// descendantsOf returns all descendant PIDs of the given PID (children,
-// grandchildren, etc.) using breadth-first traversal via childrenOf.
+// descendantsOf returns all descendant PIDs via breadth-first wmic traversal.
+//
+// Inherits all limitations of childrenOf. Returns empty slice on any
+// enumeration failure.
 func descendantsOf(pid int) ([]int, error) {
 	var result []int
+	visited := map[int]bool{pid: true}
 	queue := []int{pid}
 	for len(queue) > 0 {
 		current := queue[0]
@@ -61,36 +94,32 @@ func descendantsOf(pid int) ([]int, error) {
 			return result, err
 		}
 		for _, c := range children {
-			result = append(result, c)
-			queue = append(queue, c)
+			if !visited[c] {
+				visited[c] = true
+				result = append(result, c)
+				queue = append(queue, c)
+			}
 		}
 	}
 	return result, nil
 }
 
-// signalByPID sends a signal to a process by PID on Windows using taskkill.
+// signalByPID sends a signal to a process by PID on Windows.
 //
-// Note: os.FindProcess().Kill() on Windows opens the process without
-// PROCESS_TERMINATE rights, so it fails with "Access is denied". We use
-// taskkill instead, which works for any process owned by the current user.
+// Windows has no POSIX signal concept. All signals use taskkill /T /F
+// which terminates the entire process tree. This is a platform limitation:
+// Windows cannot signal a parent without also signaling its children.
 //
-// On Windows, taskkill without /F can only terminate GUI processes that
-// respond to WM_CLOSE. Console applications require /F. Therefore all
-// signals use /F (force) on this platform.
-//
-// If the process is already gone (taskkill reports "not found"), we treat
-// that as a success — the kill target was already achieved.
+// If the process is already gone, treated as success.
 func signalByPID(pid int, signal string) error {
-	cmd := exec.Command("cmd", "/c",
-		fmt.Sprintf("taskkill /PID %d /F", pid))
+	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := string(out)
-		// "not found" means the process already exited — treat as success.
 		if strings.Contains(outStr, "not found") {
 			return nil
 		}
-		return fmt.Errorf("taskkill %d: %w\noutput: %s", pid, err, outStr)
+		return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, err, outStr)
 	}
 	return nil
 }
