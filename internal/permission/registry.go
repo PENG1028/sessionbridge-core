@@ -63,6 +63,9 @@ var AllPluginsCaps = map[types.PluginID][]string{
 	},
 	"sessionnode-core": {
 		"system.info",
+		"logs.tail",
+		"logs.query",
+		"audit.list",
 		"plugin.list",
 		"plugin.get",
 		"plugin.info",

@@ -200,11 +200,15 @@ func (r *Registry) registerDefaults() {
 	r.Register("session.history.list", historyList)
 	r.Register("session.history.clear.plan", historyClearPlan)
 	r.Register("session.history.clear.execute", historyClearExecute)
-	r.Register("stream.replay", streamReplay)
-	r.Register("stream.tail", streamTail)
+		r.Register("stream.replay", streamReplay)
+		r.Register("stream.tail", streamTail)
 
-	r.Register("task.list", taskList)
-	r.Register("task.info", taskInfo)
+		r.Register("logs.tail", logsTail)
+		r.Register("logs.query", logsQuery)
+		r.Register("audit.list", auditList)
+
+		r.Register("task.list", taskList)
+		r.Register("task.info", taskInfo)
 
 	r.Register("run.create", runCreate)
 	r.Register("run.list", runList)

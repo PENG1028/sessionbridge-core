@@ -84,6 +84,10 @@ var KnownCapabilities = map[string]bool{
 	"logs.query":  true,
 	"logs.export": true,
 
+	// Audit
+	"audit.list": true,
+	"audit.get":  true,
+
 	// Notify / Approval
 	"notify.send":    true,
 	"notify.request": true,

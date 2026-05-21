@@ -394,6 +394,26 @@ func (s *Store) QueryPluginEvents(pluginID string) []PluginEvent {
 	return out
 }
 
+// --- Log / Audit stubs (Phase 1: return nil — callers handle gracefully) ---
+
+// RecentLogLines returns log lines matching source and level, up to limit.
+// Phase 1: returns nil (callers treat nil as empty slice).
+func (s *Store) RecentLogLines(source, level string, limit int) interface{} {
+	return nil
+}
+
+// RecentLogEntries returns structured log entries matching source, pluginID and level.
+// Phase 1: returns nil.
+func (s *Store) RecentLogEntries(source, pluginID, level string, limit int) interface{} {
+	return nil
+}
+
+// RecentAuditEntries returns audit trail entries matching the given filters.
+// Phase 1: returns nil.
+func (s *Store) RecentAuditEntries(eventType, actor, target string, limit int) interface{} {
+	return nil
+}
+
 // --- internal helpers ---
 
 func (sh *sessionHistory) trackStream(streamType string) bool {
