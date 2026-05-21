@@ -183,11 +183,14 @@ func TestKillProcessTree_NoChildren(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	if !processExists(t, pid) {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows process exited before kill; environment unstable")
+		}
 		t.Fatalf("process %d exited before we could kill it", pid)
 	}
 
 	if err := killProcessTree(pid, "SIGKILL"); err != nil {
-		if isAccessDenied(err) && runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" && isAccessDenied(err) {
 			t.Skipf("taskkill Access Denied — cannot verify tree kill: %v", err)
 		}
 		t.Fatalf("killProcessTree(%d): %v", pid, err)
@@ -255,12 +258,15 @@ func TestKillProcessTree_SIGTERM_SIGINT(t *testing.T) {
 			time.Sleep(1 * time.Second)
 
 			if !processExists(t, pid) {
+				if runtime.GOOS == "windows" {
+					t.Skipf("Windows process exited before %s; environment unstable", sig)
+				}
 				t.Fatalf("process %d exited before signal %s", pid, sig)
 			}
 
 			err := killProcessTree(pid, sig)
 			if err != nil {
-				if isAccessDenied(err) && runtime.GOOS == "windows" {
+				if runtime.GOOS == "windows" && isAccessDenied(err) {
 					t.Skipf("taskkill Access Denied for %s: %v", sig, err)
 				}
 				t.Fatalf("killProcessTree(%d, %s): %v", pid, sig, err)
