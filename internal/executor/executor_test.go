@@ -3361,3 +3361,153 @@ func TestPluginPermissionsGrant_CorrectParams(t *testing.T) {
 
 	t.Logf("grant result: %v", resultMap)
 }
+
+// TestPluginPermissionsGrant_WithPayloadPlanId verifies that
+// plugin.permissions.grant accepts planId in the payload (not only at
+// the request level). This is the UI re-call path after approval:
+//   1. First grant → requires_approval + planId
+//   2. notify.request + notify.respond (approve)
+//   3. Second grant with payload.planId → ok
+func TestPluginPermissionsGrant_WithPayloadPlanId(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Step 1: First grant (high-risk) — no planId → requires_approval
+	m1 := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+	})
+	if m1["status"] != "requires_approval" {
+		t.Fatalf("step 1 status = %v, want requires_approval", m1["status"])
+	}
+	planID := m1["planId"].(string)
+	if planID == "" {
+		t.Fatal("expected non-empty planId from requires_approval")
+	}
+
+	// Step 2: Create an approval request linked to this plan
+	m2 := execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Approve grant",
+		"body":    "Grant plugin.uninstall",
+		"planId":  planID,
+		"timeout": 60,
+	})
+	requestID := m2["requestId"].(string)
+
+	// Step 3: Approve via notify.respond
+	execOK(t, r, "notify.respond", map[string]interface{}{
+		"requestId": requestID,
+		"action":    "allow",
+	})
+
+	// Step 4: Second grant — planId passed in payload (UI path)
+	m3 := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+		"planId":     planID,
+	})
+	if m3["status"] != "ok" {
+		t.Errorf("step 4 status = %v, want ok (plan was approved, payload.planId should work)", m3["status"])
+	}
+	if m3["capability"] != "plugin.uninstall" {
+		t.Errorf("capability = %v, want plugin.uninstall", m3["capability"])
+	}
+	if m3["mode"] != "allow" {
+		t.Errorf("mode = %v, want allow", m3["mode"])
+	}
+}
+
+// TestPluginPermissionsGrant_WithPayloadPlanId_Denied verifies that
+// a denied plan returns approval_denied even when planId comes from
+// the payload.
+func TestPluginPermissionsGrant_WithPayloadPlanId_Denied(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create and deny a plan
+	planReq := &types.CapabilityRequest{
+		RequestID:  "req_deny",
+		PluginID:   "test-plugin",
+		Capability: "plugin.uninstall",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	planID, err := deps.PlanManager.CreatePlan(planReq)
+	if err != nil {
+		t.Fatalf("CreatePlan: %v", err)
+	}
+	if err := deps.PlanManager.DenyPlan(planID, "tester", "not allowed"); err != nil {
+		t.Fatalf("DenyPlan: %v", err)
+	}
+
+	// Grant with planId in payload (not request-level)
+	m := execOK(t, r, "plugin.permissions.grant", map[string]interface{}{
+		"pluginId":   "test-plugin",
+		"capability": "plugin.uninstall",
+		"mode":       "allow",
+		"planId":     planID,
+	})
+	if m["status"] != "approval_denied" {
+		t.Errorf("status = %v, want approval_denied", m["status"])
+	}
+}
+
+// TestApprovalList_ReturnsWrapped verifies that approval.list returns
+// { approvals: [...] } (an object wrapping an array), not a bare array.
+func TestApprovalList_ReturnsWrapped(t *testing.T) {
+	deps := planDeps(t)
+	r := New(deps)
+
+	// Create an approval request so the list is non-empty
+	execOK(t, r, "notify.request", map[string]interface{}{
+		"title":   "Test approval",
+		"body":    "Testing list wrapper",
+		"timeout": 60,
+	})
+
+	req := &types.CapabilityRequest{
+		RequestID:  "req-approval-wrap",
+		Capability: "approval.list",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+
+	result, err := r.Execute(req)
+	if err != nil {
+		t.Fatalf("approval.list failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", result)
+	}
+
+	// Must have "approvals" key
+	approvalsRaw, ok := resultMap["approvals"]
+	if !ok {
+		t.Fatal("expected \"approvals\" key in result object")
+	}
+
+	// Must be an array
+	approvals, ok := approvalsRaw.([]interface{})
+	if !ok {
+		t.Fatalf("expected approvals to be array, got %T", approvalsRaw)
+	}
+
+	// Should have at least one pending approval
+	if len(approvals) == 0 {
+		t.Error("expected at least one pending approval")
+	}
+
+	// Each approval should be an object with a requestId
+	for _, a := range approvals {
+		entry, ok := a.(map[string]interface{})
+		if !ok {
+			t.Errorf("expected approval entry to be map, got %T", a)
+			continue
+		}
+		if entry["requestId"] == nil || entry["requestId"] == "" {
+			t.Error("approval entry missing requestId")
+		}
+	}
+}

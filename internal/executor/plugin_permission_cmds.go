@@ -73,6 +73,7 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 		Capability  string                 `json:"capability"`
 		Mode        string                 `json:"mode"`
 		Constraints map[string]interface{} `json:"constraints,omitempty"`
+		PlanID      string                 `json:"planId,omitempty"`
 	}
 	if req.Payload != nil {
 		if err := json.Unmarshal(req.Payload, &payload); err != nil {
@@ -89,10 +90,18 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 		return nil, fmt.Errorf("invalid mode: %q (must be allow, deny, or ask)", payload.Mode)
 	}
 
+	// Compute effective plan ID — request-level PlanID takes priority,
+	// payload.planId is the fallback (UI passes planId in payload for
+	// re-calls after approval).
+	effectivePlanID := req.PlanID
+	if effectivePlanID == "" {
+		effectivePlanID = payload.PlanID
+	}
+
 	// High-risk capability check — requires plan approval.
 	if isHighRiskCapability(payload.Capability) {
 		if deps.PlanManager != nil {
-			if req.PlanID == "" {
+			if effectivePlanID == "" {
 				// No plan provided: create one and return pending.
 				planReq := *req
 				planReq.Capability = payload.Capability
@@ -107,11 +116,11 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 				}, nil
 			}
 			// Plan ID provided: validate it before proceeding.
-			if err := deps.PlanManager.ValidatePlan(req.PlanID); err != nil {
+			if err := deps.PlanManager.ValidatePlan(effectivePlanID); err != nil {
 				return map[string]interface{}{
 					"status":   "approval_denied",
 					"message":  err.Error(),
-					"planId":   req.PlanID,
+					"planId":   effectivePlanID,
 				}, nil
 			}
 			// Plan is approved — fall through to grant below.
@@ -127,7 +136,7 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 	// Low-risk ask mode also requires plan approval.
 	if payload.Mode == "ask" {
 		if deps.PlanManager != nil {
-			if req.PlanID == "" {
+			if effectivePlanID == "" {
 				planReq := *req
 				planReq.Capability = payload.Capability
 				planID, err := deps.PlanManager.CreatePlan(&planReq)
@@ -140,11 +149,11 @@ func pluginPermissionsGrant(req *types.CapabilityRequest, deps *Deps) (interface
 					"planId":  planID,
 				}, nil
 			}
-			if err := deps.PlanManager.ValidatePlan(req.PlanID); err != nil {
+			if err := deps.PlanManager.ValidatePlan(effectivePlanID); err != nil {
 				return map[string]interface{}{
 					"status":   "approval_denied",
 					"message":  err.Error(),
-					"planId":   req.PlanID,
+					"planId":   effectivePlanID,
 				}, nil
 			}
 			// Plan is approved — fall through to grant below.
