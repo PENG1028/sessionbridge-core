@@ -161,6 +161,92 @@ func TestSignal_Kill(t *testing.T) {
 	}
 }
 
+func TestSignal_TreeKill(t *testing.T) {
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+	defer m.Cleanup()
+
+	sleepBin := testutil.SleepBinary(t)
+	sid, err := m.Spawn(sleepBin, []string{"60"}, "", nil)
+	if err != nil {
+		t.Fatalf("Spawn sleep: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if err := m.Signal(sid, "SIGKILL", true); err != nil {
+		t.Fatalf("Signal tree=true: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	proc := m.Get(sid)
+	if proc == nil {
+		t.Fatal("expected process after tree kill")
+	}
+	if proc.State != "exited" {
+		t.Errorf("expected exited after tree kill, got %s", proc.State)
+	}
+}
+
+func TestSignal_TreeTerminate(t *testing.T) {
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+	defer m.Cleanup()
+
+	sleepBin := testutil.SleepBinary(t)
+	sid, err := m.Spawn(sleepBin, []string{"60"}, "", nil)
+	if err != nil {
+		t.Fatalf("Spawn sleep: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if err := m.Signal(sid, "SIGTERM", true); err != nil {
+		t.Fatalf("Signal tree=true SIGTERM: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	proc := m.Get(sid)
+	if proc == nil {
+		t.Fatal("expected process after tree terminate")
+	}
+	if proc.State != "exited" {
+		t.Errorf("expected exited after tree terminate, got %s", proc.State)
+	}
+}
+
+func TestSignal_TreeFalse_Unchanged(t *testing.T) {
+	// tree=false must behave identically to the pre-R11 behavior.
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+	defer m.Cleanup()
+
+	sleepBin := testutil.SleepBinary(t)
+	sid, err := m.Spawn(sleepBin, []string{"60"}, "", nil)
+	if err != nil {
+		t.Fatalf("Spawn sleep: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if err := m.Signal(sid, "SIGKILL", false); err != nil {
+		t.Fatalf("Signal tree=false: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	proc := m.Get(sid)
+	if proc.State != "exited" {
+		t.Errorf("expected exited after tree=false kill, got %s", proc.State)
+	}
+}
+
+func TestSignal_TreeProcessNotFound(t *testing.T) {
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+
+	err := m.Signal("nonexistent", "SIGTERM", true)
+	if err == nil {
+		t.Fatal("expected error for nonexistent process with tree=true")
+	}
+}
+
 func TestList_Count(t *testing.T) {
 	tr := newTestRecorder()
 	m := NewManager(tr.pusher, tr.eventer)

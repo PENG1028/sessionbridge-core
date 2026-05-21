@@ -22,19 +22,19 @@ type EventFunc func(sid types.SessionID, seq types.EventSeq, eventType string, d
 
 // Process represents a running or completed OS process.
 type Process struct {
-	SessionID        types.SessionID
-	ParentSessionID  types.SessionID // parent process session ID (empty if root)
-	RootSessionID    types.SessionID // root of the process tree
-	PluginID         types.PluginID  // plugin that owns this process
-	Kind             string          // process kind: "terminal", "task", "agent", etc.
-	Cmd              *exec.Cmd
-	State            string
-	ExitCode         int
-	CreatedAt        int64
-	PID              int
-	StdinPipe        io.WriteCloser
-	ptyMaster        *os.File // non-nil for PTY sessions
-	pty              bool     // true when spawned via SpawnPTY
+	SessionID       types.SessionID
+	ParentSessionID types.SessionID // parent process session ID (empty if root)
+	RootSessionID   types.SessionID // root of the process tree
+	PluginID        types.PluginID  // plugin that owns this process
+	Kind            string          // process kind: "terminal", "task", "agent", etc.
+	Cmd             *exec.Cmd
+	State           string
+	ExitCode        int
+	CreatedAt       int64
+	PID             int
+	StdinPipe       io.WriteCloser
+	ptyMaster       *os.File // non-nil for PTY sessions
+	pty             bool     // true when spawned via SpawnPTY
 }
 
 // SpawnConfig carries optional metadata for spawning a process.
@@ -238,8 +238,9 @@ func (m *Manager) DescendantIDs(sid types.SessionID) []types.SessionID {
 	return result
 }
 
-// Signal sends a signal to the process. If tree is true, also signals
-// all descendant processes in the process tree.
+// Signal sends a signal to the process. If tree is true, uses OS-level
+// process tree termination to signal all descendants and the parent.
+// If tree is false, signals only the target process directly.
 func (m *Manager) Signal(sid types.SessionID, signal string, tree bool) error {
 	m.mu.Lock()
 	proc, ok := m.processes[sid]
@@ -247,26 +248,24 @@ func (m *Manager) Signal(sid types.SessionID, signal string, tree bool) error {
 	if !ok {
 		return fmt.Errorf("process not found: %s", sid)
 	}
-	if proc.State != "running" {
-		return fmt.Errorf("process %s is not running (state: %s)", sid, proc.State)
-	}
-	if err := sendSignal(proc, signal); err != nil {
-		return err
-	}
+
 	if tree {
-		for _, childID := range m.DescendantIDs(sid) {
-			m.mu.Lock()
-			child, ok := m.processes[childID]
-			m.mu.Unlock()
-			if ok && child.State == "running" {
-				sendSignal(child, signal)
-			}
+		// OS-level process tree termination: signals the parent and all
+		// descendants in a single call.
+		if err := killProcessTree(proc.PID, signal); err != nil {
+			// Best-effort: tree kill failed, fall back to direct signal
+			// so the target process is at least signaled.
+			log.Printf("[process] tree kill failed for %s (pid %d): %v, falling back to direct signal", sid, proc.PID, err)
+			return signalProcess(proc, signal)
 		}
+		return nil
 	}
-	return nil
+
+	// tree=false: direct signal only (existing behavior)
+	return signalProcess(proc, signal)
 }
 
-func sendSignal(proc *Process, signal string) error {
+func signalProcess(proc *Process, signal string) error {
 	switch signal {
 	case "kill", "SIGKILL", "terminate", "SIGTERM":
 		return proc.Cmd.Process.Kill()
