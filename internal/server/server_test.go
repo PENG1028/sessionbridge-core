@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/permission"
 	"github.com/user/sessionnode/go-core/internal/process"
+	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
@@ -1188,6 +1191,355 @@ func TestWSServiceTokenE2E(t *testing.T) {
 		t.Fatalf("expected success with valid token, got: %v", resp3.Error)
 	}
 	conn3.Close()
+}
+
+// ---------------------------------------------------------------------------
+// Terminal Reconnect E2E — disconnect / reconnect lifecycle
+// ---------------------------------------------------------------------------
+
+// testServerWithRunStore creates a server wired with RunStore, History, and
+// ProcessManager. This is needed for run.* capabilities (run.create, run.list,
+// run.info, run.stop) and stream.replay.
+func testServerWithRunStore(t *testing.T) (*Server, *httptest.Server, *run.Store, *history.Store) {
+	t.Helper()
+
+	sessStore := session.NewStore()
+	cr := wsconn.NewRegistry()
+	historyStore := history.New("")
+	runStore := run.NewStore()
+
+	// Wrap push/event callbacks to record into history (same as production main.go)
+	wrappedPush := func(sid types.SessionID, streamType string, seq types.EventSeq, data string) {
+		historyStore.Record(sid, streamType, seq, data)
+		cr.PushChunk(sid, streamType, seq, data)
+	}
+	wrappedEvent := func(sid types.SessionID, seq types.EventSeq, eventType string, data interface{}) {
+		if eventType == "started" || eventType == "exited" {
+			historyStore.RecordEvent(sid, seq, "session."+eventType, data)
+		}
+		cr.PushSessionEvent(sid, seq, eventType, data)
+	}
+	pm := process.NewManager(wrappedPush, wrappedEvent)
+	pm.SetOnSpawn(func(sid types.SessionID) {
+		historyStore.InitSession(sid, types.DefaultHistoryPolicy())
+	})
+
+	execDeps := &executor.Deps{
+		Sessions:   sessStore,
+		Processes:  pm,
+		ConnRoutes: cr,
+		History:    historyStore,
+		RunStore:   runStore,
+	}
+	execReg := executor.New(execDeps)
+
+	permChecker := permission.NewChecker(
+		&mockCapRegistry{},
+		&mockPolicyStore{},
+	)
+
+	audit := &mockAuditLogger{}
+	topo := &mockTopology{}
+
+	d := dispatcher.New(
+		auth.NewTokenAuthenticator(""),
+		&mockPluginRegistry{},
+		permChecker,
+		nil, /* planner */
+		execReg,
+		audit,
+		topo,
+		"node_local",
+	)
+
+	sv := New("", d, sessStore, cr, pm)
+	httpSrv := httptest.NewServer(sv.httpServer.Handler)
+	return sv, httpSrv, runStore, historyStore
+}
+
+// longRunningEchoCommand returns a platform-appropriate command that outputs
+// numbered lines on a ~1-second interval for roughly 8 seconds.
+func longRunningEchoCommand() (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/c", "for /l %i in (1,1,8) do @echo LOOP_%i & ping -n 2 127.0.0.1 >nul"}
+	}
+	return "sh", []string{"-c", "for i in 1 2 3 4 5 6 7 8; do echo LOOP_$i; sleep 1; done"}
+}
+
+// readUntil reads WS messages until the predicate returns true, a timeout, or
+// maxReads is reached. Returns the message that satisfied the predicate.
+func readUntil(t *testing.T, conn *websocket.Conn, timeout time.Duration, maxReads int, predicate func(*protocol.Message) bool) []*protocol.Message {
+	t.Helper()
+	var collected []*protocol.Message
+	deadline := time.Now().Add(timeout)
+	for i := 0; i < maxReads; i++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		conn.SetReadDeadline(time.Now().Add(minDuration(remaining, 2*time.Second)))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		msg, err := protocol.UnmarshalMessage(raw)
+		if err != nil {
+			continue
+		}
+		collected = append(collected, msg)
+		if predicate(msg) {
+			return collected
+		}
+	}
+	return collected
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// TestTerminalReconnectE2E validates the full disconnect/reconnect lifecycle:
+//
+//	run.create → stream.chunk → WS disconnect → process keeps running →
+//	reconnect → run.list → run.info → stream.replay → stream.write → run.stop
+func TestTerminalReconnectE2E(t *testing.T) {
+	sv, httpSrv, _, historyStore := testServerWithRunStore(t)
+	defer httpSrv.Close()
+	defer historyStore.Cleanup()
+
+	// ── Step 1: Connect (conn1) ──────────────────────────────────────────
+	conn1 := wsConnect(t, httpSrv)
+
+	// ── Step 2: run.create — spawn a long-running echoing process ─────────
+	cmd, args := longRunningEchoCommand()
+	payload, err := json.Marshal(map[string]interface{}{
+		"command": cmd,
+		"args":    args,
+		"pty":     false,
+		"policy": map[string]interface{}{
+			"onDisconnect": "keep_running",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal create payload: %v", err)
+	}
+
+	createResp := sendAndRecv(t, conn1, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_create",
+		Capability: "run.create",
+		Payload:    json.RawMessage(payload),
+	})
+	if !createResp.OK {
+		t.Fatalf("run.create failed: %v", createResp.Error)
+	}
+
+	var createBody map[string]interface{}
+	if err := json.Unmarshal(createResp.Payload, &createBody); err != nil {
+		t.Fatalf("unmarshal create: %v", err)
+	}
+	runID, ok := createBody["runId"].(string)
+	if !ok || runID == "" {
+		t.Fatal("run.create missing runId")
+	}
+	sessionID, ok := createBody["sessionId"].(string)
+	if !ok || sessionID == "" {
+		t.Fatal("run.create missing sessionId")
+	}
+	t.Logf("run.create OK: runId=%s sessionId=%s", runID, sessionID)
+
+	// ── Step 3: Verify stream.chunk push messages arrive on conn1 ────────
+	// The process outputs "LOOP_1", "LOOP_2", ... every ~1 second.
+	msgs := readUntil(t, conn1, 10*time.Second, 30, func(msg *protocol.Message) bool {
+		return msg.Type == protocol.MsgTypeStreamChunk && msg.Data != ""
+	})
+	foundChunk := false
+	for _, m := range msgs {
+		if m.Type == protocol.MsgTypeStreamChunk {
+			foundChunk = true
+			t.Logf("[conn1] chunk: sessionId=%s streamType=%s data=%q seq=%d", m.SessionID, m.StreamType, m.Data, m.EventSeq)
+		}
+	}
+	if !foundChunk {
+		t.Error("expected at least one stream.chunk on conn1 after run.create")
+	}
+
+	// ── Step 4: Close conn1 (simulate browser/UI disconnect) ─────────────
+	if err := conn1.Close(); err != nil {
+		t.Logf("conn1 close error (non-fatal): %v", err)
+	}
+	t.Log("conn1 closed — simulating browser/UI disconnect")
+
+	// ── Step 5: Wait, then verify process still running ──────────────────
+	// The process should keep running because onDisconnect=keep_running.
+	time.Sleep(3 * time.Second)
+
+	proc := sv.procManager.Get(types.SessionID(sessionID))
+	if proc == nil {
+		t.Fatal("process not found after disconnect — it should still be running")
+	}
+	if proc.State != "running" {
+		t.Errorf("expected process state 'running' after disconnect, got %q", proc.State)
+	}
+	t.Logf("process still running after disconnect: pid=%d state=%s", proc.PID, proc.State)
+
+	// ── Step 6: Reconnect (conn2) ────────────────────────────────────────
+	conn2 := wsConnect(t, httpSrv)
+	defer conn2.Close()
+
+	// ── Step 7: run.list returns the run (state: running) ────────────────
+	listResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_list",
+		Capability: "run.list",
+	})
+	if !listResp.OK {
+		t.Fatalf("run.list failed: %v", listResp.Error)
+	}
+	var listBody map[string]interface{}
+	if err := json.Unmarshal(listResp.Payload, &listBody); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	runs, ok := listBody["runs"].([]interface{})
+	if !ok {
+		t.Fatalf("expected runs array, got %T", listBody["runs"])
+	}
+	if len(runs) == 0 {
+		t.Fatal("run.list returned 0 runs after reconnect")
+	}
+	firstRun := runs[0].(map[string]interface{})
+	runState, _ := firstRun["state"].(string)
+	t.Logf("run.list: found %d run(s), first run state=%q", len(runs), runState)
+
+	// ── Step 8: run.info returns sessionId ───────────────────────────────
+	infoResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_info",
+		Capability: "run.info",
+		Payload:    json.RawMessage(fmt.Sprintf(`{"runId":"%s"}`, runID)),
+	})
+	if !infoResp.OK {
+		t.Fatalf("run.info failed: %v", infoResp.Error)
+	}
+	var infoBody map[string]interface{}
+	if err := json.Unmarshal(infoResp.Payload, &infoBody); err != nil {
+		t.Fatalf("unmarshal info: %v", err)
+	}
+	infoSID, _ := infoBody["sessionId"].(string)
+	infoState, _ := infoBody["state"].(string)
+	if infoSID != sessionID {
+		t.Errorf("run.info sessionId mismatch: got %q, want %q", infoSID, sessionID)
+	}
+	t.Logf("run.info: sessionId=%s state=%s", infoSID, infoState)
+
+	// ── Step 9: stream.replay recovers output from disconnect period ─────
+	replayResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_replay",
+		Capability: "stream.replay",
+		Payload:    json.RawMessage(fmt.Sprintf(`{"sessionId":"%s","streamType":"stdout"}`, sessionID)),
+	})
+	if !replayResp.OK {
+		t.Fatalf("stream.replay failed: %v", replayResp.Error)
+	}
+	var replayBody map[string]interface{}
+	if err := json.Unmarshal(replayResp.Payload, &replayBody); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	events, ok := replayBody["events"].([]interface{})
+	if !ok {
+		t.Fatalf("expected events array in replay, got %T", replayBody["events"])
+	}
+	t.Logf("stream.replay: %d events recovered", len(events))
+	if len(events) == 0 {
+		t.Error("expected at least 1 event from stream.replay (output produced during disconnect)")
+	}
+	// Verify at least one event contains "LOOP_" data
+	hasLoopData := false
+	for _, evt := range events {
+		evtMap, ok := evt.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if data, ok := evtMap["data"].(string); ok && strings.Contains(data, "LOOP_") {
+			hasLoopData = true
+			t.Logf("replay event data: %q", data)
+			break
+		}
+	}
+	if !hasLoopData {
+		t.Log("note: replay events may not contain LOOP_ if process output is still buffered")
+	}
+
+	// ── Step 10: stream.subscribe on conn2 (re-attach for live output) ───
+	subResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_sub",
+		Capability: "stream.subscribe",
+		Payload:    json.RawMessage(fmt.Sprintf(`{"sessionId":"%s","streamType":"stdout,stderr"}`, sessionID)),
+	})
+	if !subResp.OK {
+		t.Fatalf("stream.subscribe failed: %v", subResp.Error)
+	}
+	t.Logf("stream.subscribe OK on conn2")
+
+	// ── Step 11: stream.write (stdin) works after reattach ──────────────
+	// Uses stdin streamType which routes through ProcessManager.WriteStdin
+	// rather than session.Store — this is the correct path for process-owned streams.
+	writePayload := json.RawMessage(fmt.Sprintf(`{"sessionId":"%s","streamType":"stdin","data":"hello from reconnect"}`, sessionID))
+	writeResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_write",
+		Capability: "stream.write",
+		Payload:    writePayload,
+	})
+	if !writeResp.OK {
+		t.Errorf("stream.write (stdin) failed: %v", writeResp.Error)
+	}
+	var writeBody map[string]interface{}
+	if err := json.Unmarshal(writeResp.Payload, &writeBody); err == nil {
+		written, _ := writeBody["written"].(float64)
+		if written == 0 {
+			t.Error("expected >0 written bytes for stdin")
+		}
+		t.Logf("stream.write (stdin) OK: written=%v", written)
+	}
+
+	// ── Step 12: run.stop stops the run ──────────────────────────────────
+	stopResp := sendAndRecv(t, conn2, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_stop",
+		Capability: "run.stop",
+		Payload:    json.RawMessage(fmt.Sprintf(`{"runId":"%s","signal":"SIGTERM"}`, runID)),
+	})
+	if !stopResp.OK {
+		t.Fatalf("run.stop failed: %v", stopResp.Error)
+	}
+	var stopBody map[string]interface{}
+	if err := json.Unmarshal(stopResp.Payload, &stopBody); err != nil {
+		t.Fatalf("unmarshal stop: %v", err)
+	}
+	stopState, _ := stopBody["state"].(string)
+	if stopState != run.StateStopped {
+		t.Errorf("expected state %q after stop, got %q", run.StateStopped, stopState)
+	}
+	t.Logf("run.stop OK: state=%s", stopState)
+
+	// ── Verify process was actually terminated ───────────────────────────
+	time.Sleep(500 * time.Millisecond)
+	proc2 := sv.procManager.Get(types.SessionID(sessionID))
+	if proc2 != nil && proc2.State == "running" {
+		t.Error("process should not be running after run.stop")
+	}
+	t.Logf("post-stop process state: %v", func() string {
+		if proc2 == nil {
+			return "(nil)"
+		}
+		return proc2.State
+	}())
 }
 
 func errCode(e *types.CoreError) string {

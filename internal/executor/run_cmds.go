@@ -190,7 +190,6 @@ func runList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		case "exited":
 			if r.State != run.StateExited && r.State != run.StateStopped && r.State != run.StateFailed {
 				deps.RunStore.UpdateState(r.RunID, run.StateExited)
-				r.State = run.StateExited
 			}
 		case "running":
 			// Keep as-is

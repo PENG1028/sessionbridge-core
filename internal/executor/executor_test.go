@@ -2981,7 +2981,7 @@ func TestRunIntegration_StreamWriteToRunProcess(t *testing.T) {
 	deps.Processes.CloseStdin(types.SessionID(sid))
 }
 
-func TestRunIntegration_DisconnectDoesNotKillRunProcess(t *testing.T) {
+func TestRunCreate_LongRunningProcessStarts(t *testing.T) {
 	deps := testDeps(t)
 	r := New(deps)
 	sleepBin := testutil.SleepBinary(t)
