@@ -3,11 +3,19 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 )
+
+// ErrAccessDenied is returned by killProcessTree and signalByPID when
+// taskkill fails with "Access is denied". Callers (especially tests)
+// should treat this as a partial-failure signal: the OS tree could not
+// be terminated, but the manager's fallback (direct proc.Kill()) may
+// still succeed for the parent process.
+var ErrAccessDenied = errors.New("taskkill access denied")
 
 // killProcessTree on Windows uses taskkill /T /F to terminate the entire
 // OS process tree in a single call. It does NOT rely on wmic enumeration.
@@ -27,8 +35,14 @@ func killProcessTree(pid int, signal string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := string(out)
+		// "not found" — process already exited. Treated as success.
 		if strings.Contains(outStr, "not found") {
 			return nil
+		}
+		// "Access is denied" — taskkill lacks permissions. Wrap with
+		// sentinel so callers (including tests) can detect partial failure.
+		if strings.Contains(outStr, "Access is denied") || strings.Contains(outStr, "denied") {
+			return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, ErrAccessDenied, outStr)
 		}
 		return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, err, outStr)
 	}
@@ -118,6 +132,9 @@ func signalByPID(pid int, signal string) error {
 		outStr := string(out)
 		if strings.Contains(outStr, "not found") {
 			return nil
+		}
+		if strings.Contains(outStr, "Access is denied") || strings.Contains(outStr, "denied") {
+			return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, ErrAccessDenied, outStr)
 		}
 		return fmt.Errorf("taskkill /T /F %d: %w\noutput: %s", pid, err, outStr)
 	}
