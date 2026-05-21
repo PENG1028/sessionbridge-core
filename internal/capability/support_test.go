@@ -269,3 +269,64 @@ func TestSupportLevelValues(t *testing.T) {
 		t.Errorf("SupportUnknown = %q, want unknown", SupportUnknown)
 	}
 }
+
+// ── network.* capability tests ─────────────────────────────────────────────
+
+func TestNetworkCapabilitiesDesktopFull(t *testing.T) {
+	caps := []string{"network.connect", "network.listen", "network.dns"}
+	for _, plat := range []platform.RuntimePlatform{desktop(), linux(), darwin()} {
+		r := Resolver{Platform: plat}
+		for _, c := range caps {
+			cs := r.CheckCapability(c)
+			if cs.Level != SupportFull {
+				t.Errorf("%s on %s: got %s, want %s", c, plat.OS, cs.Level, SupportFull)
+			}
+			if !cs.Supported {
+				t.Errorf("%s on %s: Supported should be true", c, plat.OS)
+			}
+		}
+	}
+}
+
+func TestNetworkCapabilitiesDesktopPartial(t *testing.T) {
+	caps := []string{"network.proxy", "network.fetch"}
+	for _, plat := range []platform.RuntimePlatform{desktop(), linux(), darwin()} {
+		r := Resolver{Platform: plat}
+		for _, c := range caps {
+			cs := r.CheckCapability(c)
+			if cs.Level != SupportPartial {
+				t.Errorf("%s on %s: got %s, want %s", c, plat.OS, cs.Level, SupportPartial)
+			}
+			if !cs.Supported {
+				t.Errorf("%s on %s: Supported should be true for partial", c, plat.OS)
+			}
+			if cs.Reason != "not_implemented" {
+				t.Errorf("%s on %s: Reason = %q, want not_implemented", c, plat.OS, cs.Reason)
+			}
+		}
+	}
+}
+
+func TestNetworkCapabilitiesMobileBlocked(t *testing.T) {
+	r := Resolver{Platform: mobile()}
+	networkCaps := []string{"network.connect", "network.listen", "network.dns", "network.proxy", "network.fetch"}
+	for _, c := range networkCaps {
+		cs := r.CheckCapability(c)
+		if cs.Level != SupportUnsupported {
+			t.Errorf("%s on mobile: got %s, want %s", c, cs.Level, SupportUnsupported)
+		}
+		if cs.Reason != "mobile_restricted" {
+			t.Errorf("%s on mobile: Reason = %q, want mobile_restricted", c, cs.Reason)
+		}
+	}
+}
+
+func TestNetworkCapabilitiesUnknownPlatform(t *testing.T) {
+	r := Resolver{Platform: unknownPlat()}
+	for _, c := range []string{"network.connect", "network.proxy"} {
+		cs := r.CheckCapability(c)
+		if cs.Level == SupportFull {
+			t.Errorf("%s on unknown platform should not be full", c)
+		}
+	}
+}

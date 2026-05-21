@@ -123,6 +123,13 @@ var KnownCapabilities = map[string]bool{
 	"run.info":        true,
 	"run.stop":        true,
 	"run.updatePolicy": true,
+
+	// Network
+	"network.connect": true,
+	"network.listen":  true,
+	"network.dns":     true,
+	"network.proxy":   true,
+	"network.fetch":   true,
 }
 
 // DangerousCapabilities are capabilities that must NOT have default: allow
@@ -139,6 +146,11 @@ var DangerousCapabilities = map[string]bool{
 	"permission.grant":           true,
 	"plugin.permissions.grant":   true,
 	"node.disconnect":            true,
+	"network.connect":            true,
+	"network.listen":             true,
+	"network.dns":                true,
+	"network.proxy":              true,
+	"network.fetch":              true,
 }
 
 // PermissionDefault values

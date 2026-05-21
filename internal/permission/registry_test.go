@@ -47,3 +47,26 @@ func TestAllPluginsCaps_Completeness(t *testing.T) {
 		}
 	}
 }
+
+func TestAllPluginsCaps_ClaudeCode(t *testing.T) {
+	caps, ok := AllPluginsCaps["claude-code"]
+	if !ok {
+		t.Fatal("claude-code not found in AllPluginsCaps")
+	}
+	hasNetworkConnect := false
+	hasNetworkDNS := false
+	for _, c := range caps {
+		if c == "network.connect" {
+			hasNetworkConnect = true
+		}
+		if c == "network.dns" {
+			hasNetworkDNS = true
+		}
+	}
+	if !hasNetworkConnect {
+		t.Error("claude-code should have network.connect")
+	}
+	if !hasNetworkDNS {
+		t.Error("claude-code should have network.dns")
+	}
+}

@@ -65,6 +65,28 @@ core:
         - notify.request
       default: ask
 
+    - id: claude-code.network
+      description: Network connectivity for Claude Code API calls
+      capabilities:
+        - network.connect
+        - network.dns
+      default: ask
+      constraints:
+        network:
+          hosts:
+            - api.anthropic.com
+            - "*.anthropic.com"
+          ports:
+            - 443
+          schemes:
+            - https
+
+    - id: claude-code.network-fetch
+      description: Core-managed HTTP fetch (planned, not implemented yet)
+      capabilities:
+        - network.fetch
+      default: deny
+
   environment:
     checks:
       - id: claude-binary

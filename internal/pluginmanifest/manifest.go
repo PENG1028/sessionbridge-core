@@ -40,7 +40,7 @@ type PermissionConstrainsSpec struct {
 	Paths       *PathConstraints `yaml:"paths" json:"paths,omitempty"`
 	TargetNodes []string         `yaml:"targetNodes" json:"targetNodes,omitempty"`
 	Env         []string         `yaml:"env" json:"env,omitempty"`
-	Network     []string         `yaml:"network" json:"network,omitempty"`
+	Network     *NetworkConstraints `yaml:"network" json:"network,omitempty"`
 	Resources   *ResourceLimit   `yaml:"resources" json:"resources,omitempty"`
 }
 
@@ -48,6 +48,13 @@ type PermissionConstrainsSpec struct {
 type PathConstraints struct {
 	Allow []string `yaml:"allow" json:"allow"`
 	Deny  []string `yaml:"deny" json:"deny"`
+}
+
+// NetworkConstraints defines network access constraints for a permission.
+type NetworkConstraints struct {
+	Hosts   []string `yaml:"hosts" json:"hosts,omitempty"`
+	Ports   []int    `yaml:"ports" json:"ports,omitempty"`
+	Schemes []string `yaml:"schemes" json:"schemes,omitempty"`
 }
 
 // ResourceLimit defines resource constraints.

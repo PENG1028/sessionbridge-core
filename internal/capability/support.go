@@ -115,6 +115,21 @@ var Matrix = map[string]map[string]platformRule{
 	"system.info": desktopFull,
 	"node.info":   desktopFull,
 	"node.list":   desktopFull,
+
+	// ── network family ──
+	"network.connect": desktopFull,
+	"network.listen":  desktopFull,
+	"network.dns":     desktopFull,
+	"network.proxy": {
+		"windows": {SupportPartial, "not_implemented", "Network proxy/sandbox not implemented yet"},
+		"linux":   {SupportPartial, "not_implemented", "Network proxy/sandbox not implemented yet"},
+		"darwin":  {SupportPartial, "not_implemented", "Network proxy/sandbox not implemented yet"},
+	},
+	"network.fetch": {
+		"windows": {SupportPartial, "not_implemented", "Core-managed HTTP fetch not implemented yet"},
+		"linux":   {SupportPartial, "not_implemented", "Core-managed HTTP fetch not implemented yet"},
+		"darwin":  {SupportPartial, "not_implemented", "Core-managed HTTP fetch not implemented yet"},
+	},
 }
 
 // desktopFull is a convenience value for capabilities that are fully supported on all desktop platforms.
@@ -125,7 +140,7 @@ var desktopFull = map[string]platformRule{
 }
 
 // mobileBlocked lists capability families that are unsupported on mobile/browser.
-var mobileBlocked = []string{"process.", "fs.", "env."}
+var mobileBlocked = []string{"process.", "fs.", "env.", "network."}
 
 // CheckCapability returns the support level for a single capability on the resolver's platform.
 func (r Resolver) CheckCapability(capability string) CapabilitySupport {

@@ -3241,3 +3241,60 @@ func TestRunStop_MissingSignal_DefaultsToSIGTERM(t *testing.T) {
 		t.Errorf("state = %v, want stopped", stop["state"])
 	}
 }
+
+// ── network.* capability tests ─────────────────────────────────────────────
+
+// TestPluginCheck_NetworkWithoutGrant_ReturnsMissingGrantBlocker verifies that
+// a plugin declaring network.connect without an explicit grant produces a
+// missing_grant blocker.
+func TestPluginCheck_NetworkWithoutGrant_ReturnsMissingGrantBlocker(t *testing.T) {
+	deps := capCheckDeps(t, "test-net-plugin", []pluginmanifest.PermissionSpec{
+		{ID: "test-net-plugin.network", Description: "Network access", Capabilities: []string{"network.connect"}, Default: "ask"},
+	})
+
+	r := New(deps)
+	m := execOK(t, r, "plugin.check", map[string]string{"pluginId": "test-net-plugin"})
+
+	blockers, ok := m["blockers"].([]interface{})
+	if !ok {
+		t.Fatal("blockers not found or wrong type")
+	}
+
+	hasMissingGrant := false
+	for _, b := range blockers {
+		blk, ok := b.(map[string]interface{})
+		if ok && blk["kind"] == "missing_grant" && blk["capability"] == "network.connect" {
+			hasMissingGrant = true
+		}
+	}
+
+	// On desktop platforms, network.connect is supported so the blocker
+	// should be missing_grant (default:ask with no grant).
+	plat := platform.Current()
+	if plat.IsDesktop() || plat.Runtime == "server" {
+		if !hasMissingGrant {
+			t.Errorf("expected missing_grant blocker for network.connect on %s/%s, got blockers: %v",
+				plat.OS, plat.Runtime, blockers)
+		}
+	} else {
+		t.Logf("platform %s/%s: missing_grant check skipped (non-desktop)", plat.OS, plat.Runtime)
+	}
+}
+
+// TestExecutor_NetworkCapabilitiesNotRegistered verifies that network.*
+// capabilities are NOT registered as handlers (declaration-only).
+func TestExecutor_NetworkCapabilitiesNotRegistered(t *testing.T) {
+	deps := &Deps{}
+	reg := New(deps)
+
+	req := &types.CapabilityRequest{
+		RequestID:  "req-net-exec",
+		Capability: "network.connect",
+		Actor:      types.Actor{Type: "web", ID: "tester"},
+	}
+	_, err := reg.Execute(req)
+	if err == nil {
+		t.Fatal("expected error for unregistered network.connect")
+	}
+	t.Logf("network.connect execution error (expected): %v", err)
+}

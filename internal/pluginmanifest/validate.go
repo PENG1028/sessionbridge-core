@@ -152,6 +152,17 @@ func validateCore(core *CoreSpec, pluginID string, trusted bool) []ValidationErr
 			}
 		}
 
+		// network.* requires description
+		for _, capName := range p.Capabilities {
+			if strings.HasPrefix(capName, "network.") && p.Description == "" {
+				errs = append(errs, ValidationError{
+					Field:   fmt.Sprintf("core.permissions[%d].description", i),
+					Code:    "REQUIRED",
+					Message: fmt.Sprintf("%s permission requires a description", capName),
+				})
+			}
+		}
+
 		// fs.delete requires path constraints and default ask/deny
 		for _, capName := range p.Capabilities {
 			if capName == "fs.delete" {

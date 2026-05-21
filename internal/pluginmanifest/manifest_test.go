@@ -983,3 +983,23 @@ core:
 		t.Errorf("expected EMPTY error for empty capability, got: %v", errs)
 	}
 }
+
+func TestNetworkCapabilityRequiresDescription(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test-net
+name: Test Net
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test-net.connect
+      capabilities:
+        - network.connect
+      default: ask`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for network.connect without description, got: %v", errs)
+	}
+}

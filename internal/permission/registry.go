@@ -130,4 +130,14 @@ var AllPluginsCaps = map[types.PluginID][]string{
 		"session.history.clear.plan",
 		"session.history.clear.execute",
 	},
+	"claude-code": {
+		"session.create", "session.list", "session.stop",
+		"session.history.getPolicy", "session.history.setPolicy", "session.history.stats", "session.history.list",
+		"fs.read", "fs.write", "fs.list", "fs.stat",
+		"process.spawn",
+		"config.get",
+		"notify.send", "notify.request",
+		"network.connect", "network.dns",
+		"plugin.install.execute", "plugin.cache.clear.execute",
+	},
 }
