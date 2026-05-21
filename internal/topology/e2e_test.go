@@ -765,8 +765,9 @@ func TestPeerTopology_ActorTypeNodeBypass(t *testing.T) {
 
 	dMain := newDispatcherForTopology(t, pt, "main")
 
-	// This request will be forwarded with actorType="node" (set by forward())
-	// which should bypass the token check on the peer
+	// In legacy no-mesh mode, forwarded peer-to-peer requests use
+	// actorType="node" and are accepted by the peer dispatcher. Mesh-enabled
+	// public peers use /peer/ws with an authenticated handshake instead.
 	resp := dMain.Dispatch(&types.CapabilityRequest{
 		RequestID:    "req_auth_bypass",
 		PluginID:     "sessionnode-core",
@@ -775,7 +776,7 @@ func TestPeerTopology_ActorTypeNodeBypass(t *testing.T) {
 		Actor:        types.Actor{Type: "web", ID: "tester"}, // no token!
 	})
 	if !resp.OK {
-		t.Fatalf("expected actorType=node bypass, got: %v", resp.Error)
+		t.Fatalf("expected legacy actorType=node forwarding to work, got: %v", resp.Error)
 	}
 }
 
@@ -881,25 +882,30 @@ func newDispatcherForTopology(t *testing.T, pt *PeerTopology, localID types.Node
 // ---------------------------------------------------------------------------
 
 type permitAllCaps struct{}
+
 func (m *permitAllCaps) HasCapability(pluginID types.PluginID, capability string) bool { return true }
 
 type permitAllPolicy struct{}
+
 func (m *permitAllPolicy) GetGrant(pluginID types.PluginID, capability string) (*permission.PermissionGrant, error) {
 	return &permission.PermissionGrant{Mode: "allow"}, nil
 }
 
 type allowAnyPlugin struct{}
+
 func (m *allowAnyPlugin) Get(id types.PluginID) (*dispatcher.PluginEntry, error) {
 	return &dispatcher.PluginEntry{ID: id, Enabled: true}, nil
 }
 
 type silentAudit struct{}
+
 func (m *silentAudit) Log(req *types.CapabilityRequest, allowed bool, detail string) {}
 
 // capRegistry is a selective capability registry for tests.
 type capRegistry struct {
 	caps map[string]map[string]bool // pluginID -> capability -> declared
 }
+
 func (m *capRegistry) HasCapability(pluginID types.PluginID, capability string) bool {
 	if caps, ok := m.caps[string(pluginID)]; ok {
 		return caps[capability]
@@ -911,6 +917,7 @@ func (m *capRegistry) HasCapability(pluginID types.PluginID, capability string) 
 type policyGrants struct {
 	grants map[string]map[string]*permission.PermissionGrant // pluginID -> capability -> grant
 }
+
 func (m *policyGrants) GetGrant(pluginID types.PluginID, capability string) (*permission.PermissionGrant, error) {
 	if grants, ok := m.grants[string(pluginID)]; ok {
 		if g, ok := grants[capability]; ok {

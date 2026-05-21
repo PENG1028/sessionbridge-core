@@ -10,7 +10,6 @@ package topology
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -545,7 +544,10 @@ func (pt *PeerTopology) peerHandshake(conn *websocket.Conn, peerID types.NodeID)
 	}
 
 	// Step 3: Sign the nonce.
-	signature := ed25519.Sign(ed25519.PrivateKey(pt.identity.PrivateKey), nonce)
+	signature, err := pt.identity.Sign(nonce)
+	if err != nil {
+		return fmt.Errorf("sign nonce: %w", err)
+	}
 	sigB64 := base64.StdEncoding.EncodeToString(signature)
 
 	// Step 4: Send peer.response.

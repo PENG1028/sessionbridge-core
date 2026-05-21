@@ -38,6 +38,18 @@ type TrustedPeer struct {
 	Policy         TrustPolicy `json:"policy"`
 }
 
+// deepCopy returns an independent copy of the peer so callers cannot mutate
+// the store's internal state through shared pointers/slices.
+func (p *TrustedPeer) deepCopy() *TrustedPeer {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	cp.PublicKey = append([]byte(nil), p.PublicKey...)
+	cp.Addresses = append([]string(nil), p.Addresses...)
+	return &cp
+}
+
 // trustFilePayload is the on-disk representation of the trust store.
 type trustFilePayload struct {
 	Peers []*TrustedPeer `json:"peers"`
@@ -80,27 +92,23 @@ func (ts *TrustStore) Load() error {
 
 	ts.peers = make(map[string]*TrustedPeer, len(payload.Peers))
 	for _, p := range payload.Peers {
-		ts.peers[p.NodeID] = p
+		if p == nil {
+			continue
+		}
+		ts.peers[p.NodeID] = p.deepCopy()
 	}
 	return nil
 }
 
-// Save persists the current peer set to disk.
+// Save persists the current peer set to disk. It holds a read lock only
+// while snapshotting peers into memory, then releases the lock before
+// marshaling and writing to disk.
 func (ts *TrustStore) Save() error {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-
-	return ts.saveLocked()
+	return ts.writeFile(ts.snapshot())
 }
 
-// saveLocked writes without acquiring the write lock. Caller must hold at
-// least a read lock.
-func (ts *TrustStore) saveLocked() error {
-	peers := make([]*TrustedPeer, 0, len(ts.peers))
-	for _, p := range ts.peers {
-		peers = append(peers, p)
-	}
-
+// writeFile marshals the peer list and writes it to disk.
+func (ts *TrustStore) writeFile(peers []*TrustedPeer) error {
 	payload := trustFilePayload{Peers: peers}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -113,45 +121,73 @@ func (ts *TrustStore) saveLocked() error {
 	return nil
 }
 
-// Add inserts or updates a trusted peer. If a peer with the same nodeID
-// already exists it is replaced.
-func (ts *TrustStore) Add(peer *TrustedPeer) error {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
+// snapshot returns deep copies of all peers under a read lock.
+func (ts *TrustStore) snapshot() []*TrustedPeer {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.snapshotLocked()
+}
 
-	ts.peers[peer.NodeID] = peer
-	return ts.saveLocked()
+// snapshotLocked returns deep copies of all peers. The caller must hold either
+// the read or write lock.
+func (ts *TrustStore) snapshotLocked() []*TrustedPeer {
+	out := make([]*TrustedPeer, 0, len(ts.peers))
+	for _, p := range ts.peers {
+		out = append(out, p.deepCopy())
+	}
+	return out
+}
+
+// Add inserts or updates a trusted peer. A deep copy of the peer is stored so
+// the caller cannot mutate the store's internal state through the argument.
+func (ts *TrustStore) Add(peer *TrustedPeer) error {
+	if peer == nil {
+		return fmt.Errorf("mesh: trusted peer is nil")
+	}
+	cp := peer.deepCopy()
+
+	ts.mu.Lock()
+	ts.peers[cp.NodeID] = cp
+	peers := ts.snapshotLocked()
+	ts.mu.Unlock()
+
+	return ts.writeFile(peers)
 }
 
 // Remove deletes a trusted peer by nodeID (revoke).
 func (ts *TrustStore) Remove(nodeID string) error {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-
 	delete(ts.peers, nodeID)
-	return ts.saveLocked()
+	peers := ts.snapshotLocked()
+	ts.mu.Unlock()
+
+	return ts.writeFile(peers)
 }
 
-// Get returns the trusted peer identified by nodeID, or an error if not found.
+// Get returns an independent copy of the trusted peer identified by nodeID,
+// or an error if not found.
 func (ts *TrustStore) Get(nodeID string) (*TrustedPeer, error) {
 	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-
 	p, ok := ts.peers[nodeID]
+	if ok {
+		p = p.deepCopy()
+	}
+	ts.mu.RUnlock()
+
 	if !ok {
 		return nil, fmt.Errorf("mesh: peer %q not found in trust store", nodeID)
 	}
 	return p, nil
 }
 
-// List returns a snapshot of all trusted peers.
+// List returns a snapshot of all trusted peers as independent deep copies.
 func (ts *TrustStore) List() []*TrustedPeer {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
 	out := make([]*TrustedPeer, 0, len(ts.peers))
 	for _, p := range ts.peers {
-		out = append(out, p)
+		out = append(out, p.deepCopy())
 	}
 	return out
 }
@@ -165,9 +201,12 @@ func (ts *TrustStore) List() []*TrustedPeer {
 //   - (false, err)  — peer is known but public key does not match (possible impersonation)
 func (ts *TrustStore) Trusted(nodeID string, publicKey []byte) (bool, error) {
 	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-
 	p, ok := ts.peers[nodeID]
+	if ok {
+		p = p.deepCopy()
+	}
+	ts.mu.RUnlock()
+
 	if !ok {
 		return false, nil
 	}
@@ -190,12 +229,19 @@ func (ts *TrustStore) Trusted(nodeID string, publicKey []byte) (bool, error) {
 	return true, nil
 }
 
-// UpdateLastSeen updates the LastSeen timestamp for a peer.
+// UpdateLastSeen updates the LastSeen timestamp for a peer and persists the
+// change to disk.
 func (ts *TrustStore) UpdateLastSeen(nodeID string) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-
-	if p, ok := ts.peers[nodeID]; ok {
-		p.LastSeen = time.Now().UnixMilli()
+	p, ok := ts.peers[nodeID]
+	if !ok {
+		ts.mu.Unlock()
+		return
 	}
+	p.LastSeen = time.Now().UnixMilli()
+	peers := ts.snapshotLocked()
+	ts.mu.Unlock()
+
+	// Persist the change.
+	_ = ts.writeFile(peers)
 }

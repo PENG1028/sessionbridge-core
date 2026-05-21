@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func genTestKey(t *testing.T) []byte {
@@ -273,5 +274,190 @@ func TestTrustStore_LoadInvalidJSON(t *testing.T) {
 	err := ts.Load()
 	if err == nil {
 		t.Fatal("expected error loading invalid JSON")
+	}
+}
+
+// --- Safety tests: verify copies are returned, not internal pointers ---
+
+func TestTrustStore_Get_ReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	ts := NewTrustStore(filepath.Join(dir, "peers.json"))
+
+	pk := genTestKey(t)
+	peer := &TrustedPeer{
+		NodeID:      "node-1",
+		Name:        "Original",
+		PublicKey:   pk,
+		Fingerprint: "fp1",
+		Addresses:   []string{"ws://a:8080"},
+		Status:      "connected",
+		Policy:      TrustPolicy{Mode: "full"},
+	}
+	if err := ts.Add(peer); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := ts.Get("node-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Mutate the returned copy — must not affect the store.
+	got.Name = "Mutated"
+	got.PublicKey[0] = 0xFF
+	got.Addresses[0] = "ws://evil:666"
+
+	got2, err := ts.Get("node-1")
+	if err != nil {
+		t.Fatalf("Get 2: %v", err)
+	}
+
+	if got2.Name != "Original" {
+		t.Fatalf("mutation leaked: expected 'Original', got %q", got2.Name)
+	}
+	if got2.Addresses[0] != "ws://a:8080" {
+		t.Fatalf("address mutation leaked: got %q", got2.Addresses[0])
+	}
+	if got2.PublicKey[0] != pk[0] {
+		t.Fatal("public key mutation leaked")
+	}
+}
+
+func TestTrustStore_List_ReturnsDeepCopies(t *testing.T) {
+	dir := t.TempDir()
+	ts := NewTrustStore(filepath.Join(dir, "peers.json"))
+
+	pk := genTestKey(t)
+	peer := &TrustedPeer{
+		NodeID:    "node-1",
+		Name:      "Original",
+		PublicKey: pk,
+		Addresses: []string{"ws://a:8080"},
+		Policy:    TrustPolicy{Mode: "full"},
+	}
+	if err := ts.Add(peer); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	list := ts.List()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(list))
+	}
+
+	// Mutate all mutable fields of the returned peer.
+	list[0].Name = "Mutated"
+	list[0].PublicKey[0] = 0xFF
+	list[0].Addresses[0] = "ws://evil:666"
+
+	// Verify store is unaffected.
+	list2 := ts.List()
+	if len(list2) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(list2))
+	}
+	if list2[0].Name != "Original" {
+		t.Fatalf("mutation leaked through List: got %q", list2[0].Name)
+	}
+	if list2[0].Addresses[0] != "ws://a:8080" {
+		t.Fatalf("address mutation leaked through List: got %q", list2[0].Addresses[0])
+	}
+	if list2[0].PublicKey[0] != pk[0] {
+		t.Fatal("public key mutation leaked through List")
+	}
+}
+
+func TestTrustStore_Add_StoresCopy(t *testing.T) {
+	dir := t.TempDir()
+	ts := NewTrustStore(filepath.Join(dir, "peers.json"))
+
+	pk := genTestKey(t)
+	originalPK := make([]byte, len(pk))
+	copy(originalPK, pk)
+
+	peer := &TrustedPeer{
+		NodeID:    "node-1",
+		Name:      "Original",
+		PublicKey: pk,
+		Addresses: []string{"ws://a:8080"},
+		Policy:    TrustPolicy{Mode: "full"},
+	}
+
+	if err := ts.Add(peer); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Mutate the original struct.
+	peer.Name = "Mutated"
+	peer.PublicKey[0] = 0xFF
+	peer.Addresses[0] = "ws://evil:666"
+
+	// Store must be unaffected.
+	got, err := ts.Get("node-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Name != "Original" {
+		t.Fatalf("mutation leaked after Add: got %q", got.Name)
+	}
+	if got.Addresses[0] != "ws://a:8080" {
+		t.Fatalf("address mutation leaked after Add: got %q", got.Addresses[0])
+	}
+	if got.PublicKey[0] != originalPK[0] {
+		t.Fatal("public key mutation leaked after Add")
+	}
+}
+
+func TestTrustStore_UpdateLastSeen_Persists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peers.json")
+
+	pk := genTestKey(t)
+	ts := NewTrustStore(path)
+	peer := &TrustedPeer{
+		NodeID:    "node-1",
+		PublicKey: pk,
+		LastSeen:  0,
+		Policy:    TrustPolicy{Mode: "full"},
+	}
+	if err := ts.Add(peer); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	before := time.Now().UnixMilli()
+	ts.UpdateLastSeen("node-1")
+	after := time.Now().UnixMilli()
+
+	// Verify in-memory update.
+	got, err := ts.Get("node-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastSeen < before || got.LastSeen > after {
+		t.Fatalf("LastSeen not updated correctly: got %d, expected between %d and %d", got.LastSeen, before, after)
+	}
+
+	// Verify persistence — load from disk.
+	ts2 := NewTrustStore(path)
+	if err := ts2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	loaded, err := ts2.Get("node-1")
+	if err != nil {
+		t.Fatalf("Get after load: %v", err)
+	}
+	if loaded.LastSeen < before || loaded.LastSeen > after {
+		t.Fatalf("LastSeen not persisted: got %d, expected between %d and %d", loaded.LastSeen, before, after)
+	}
+}
+
+func TestTrustStore_UpdateLastSeen_UnknownNode(t *testing.T) {
+	dir := t.TempDir()
+	ts := NewTrustStore(filepath.Join(dir, "peers.json"))
+
+	// Must not panic.
+	ts.UpdateLastSeen("nonexistent")
+
+	// Store should remain empty.
+	if len(ts.List()) != 0 {
+		t.Fatal("expected empty store after UpdateLastSeen on unknown node")
 	}
 }

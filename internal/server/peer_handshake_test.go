@@ -21,6 +21,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
+	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
 // testPeerKeys stores generated peer key pairs for use in handshake tests.
@@ -325,6 +326,83 @@ func TestPeerWS_TrustedPeer_HandshakeSuccess(t *testing.T) {
 		t.Fatalf("unexpected error in welcome: %v", welcome.Error)
 	}
 	t.Logf("handshake complete: remote nodeId=%s", welcome.NodeID)
+}
+
+// TestPeerWS_ReloadedIdentity_HandshakeSuccess verifies that an identity
+// loaded from disk keeps its private key and can still complete peer auth.
+func TestPeerWS_ReloadedIdentity_HandshakeSuccess(t *testing.T) {
+	_, httpSrv, _, trustStore := testServerWithMesh(t, "server_reloaded")
+	defer httpSrv.Close()
+
+	dir := t.TempDir()
+	clientID, err := mesh.LoadOrCreateIdentity(dir, "client_reload")
+	if err != nil {
+		t.Fatalf("create client identity: %v", err)
+	}
+	reloadedID, err := mesh.LoadOrCreateIdentity(dir, "client_reload")
+	if err != nil {
+		t.Fatalf("reload client identity: %v", err)
+	}
+
+	if err := trustStore.Add(&mesh.TrustedPeer{
+		NodeID:      reloadedID.NodeID,
+		Name:        "Reloaded Client",
+		PublicKey:   reloadedID.PublicKey,
+		Fingerprint: reloadedID.Fingerprint,
+		Status:      mesh.TrustStatusConnected,
+		Policy:      mesh.TrustPolicy{Mode: "full"},
+	}); err != nil {
+		t.Fatalf("add reloaded identity to trust store: %v", err)
+	}
+
+	conn := peerConnect(t, httpSrv)
+	defer conn.Close()
+
+	helloMsg := protocol.NewPeerHello(
+		types.NodeID(reloadedID.NodeID),
+		base64.StdEncoding.EncodeToString(reloadedID.PublicKey),
+		reloadedID.Fingerprint,
+		time.Now().UnixMilli(),
+	)
+	peerWrite(t, conn, helloMsg)
+
+	chal := peerRead(t, conn)
+	if chal.Type != protocol.MsgTypePeerChallenge {
+		t.Fatalf("expected peer.challenge, got type=%q", chal.Type)
+	}
+
+	var chalPayload struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(chal.Payload, &chalPayload); err != nil {
+		t.Fatalf("decode challenge payload: %v", err)
+	}
+	nonce, err := base64.StdEncoding.DecodeString(chalPayload.Nonce)
+	if err != nil {
+		t.Fatalf("decode nonce: %v", err)
+	}
+
+	signature, err := reloadedID.Sign(nonce)
+	if err != nil {
+		t.Fatalf("sign with reloaded identity: %v", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(clientID.PublicKey), nonce, signature) {
+		t.Fatal("original public key did not verify reloaded identity signature")
+	}
+
+	respMsg := protocol.NewPeerResponse(
+		chal.RequestID,
+		base64.StdEncoding.EncodeToString(signature),
+	)
+	peerWrite(t, conn, respMsg)
+
+	welcome := peerRead(t, conn)
+	if welcome.Type != protocol.MsgTypePeerWelcome {
+		t.Fatalf("expected peer.welcome, got type=%q", welcome.Type)
+	}
+	if welcome.Error != nil {
+		t.Fatalf("unexpected error in welcome: %v", welcome.Error)
+	}
 }
 
 // TestPeerWS_WrongSignature_Rejected verifies that a bad signature on the challenge
