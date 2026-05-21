@@ -96,7 +96,7 @@ func TestTwoCore_RealProcessHistoryCapture(t *testing.T) {
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
 		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
 	)
-	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal)
+	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil)
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
 	t.Cleanup(localHTTPSrv.Close)
 	localAddr := peerAddr(localHTTPSrv)
@@ -262,7 +262,7 @@ func TestTwoCore_RemoteHistoryNotStored(t *testing.T) {
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
 		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
 	)
-	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal)
+	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil)
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
 	t.Cleanup(localHTTPSrv.Close)
 	localAddr := peerAddr(localHTTPSrv)
@@ -603,7 +603,7 @@ func TestTwoCore_CrossNodeStreamChunk(t *testing.T) {
 		"node-a",
 	)
 
-	sv := server.New("", d, sessStore, cr, pm)
+	sv := server.New("", d, sessStore, cr, pm, nil, nil)
 	mainHTTPSrv := httptest.NewServer(sv.Handler())
 	defer mainHTTPSrv.Close()
 

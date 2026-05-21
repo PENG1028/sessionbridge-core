@@ -55,7 +55,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -739,7 +739,7 @@ func testServerWithHistory(t *testing.T) (*Server, *httptest.Server, *history.St
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv, historyStore
 }
@@ -786,7 +786,7 @@ func testServerWithRealPermission(t *testing.T, caps map[types.PluginID][]string
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -889,7 +889,7 @@ func TestWSAccessControl_DenyMode(t *testing.T) {
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	defer httpSrv.Close()
 
@@ -1126,7 +1126,7 @@ func testServerWithToken(t *testing.T, token string) (*Server, *httptest.Server)
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -1252,7 +1252,7 @@ func testServerWithRunStore(t *testing.T) (*Server, *httptest.Server, *run.Store
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm)
+	sv := New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv, runStore, historyStore
 }

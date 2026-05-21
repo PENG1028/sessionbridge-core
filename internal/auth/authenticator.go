@@ -24,7 +24,9 @@ func NewTokenAuthenticator(token string) *TokenAuthenticator {
 
 // Authenticate validates the actor and returns the resolved actor with defaults filled in.
 func (a *TokenAuthenticator) Authenticate(actor types.Actor) (*types.Actor, error) {
-	// Allow node-to-node communication with empty actor (trusted intra-cluster).
+	// node actor type is only set by server for authenticated peer connections
+	// (via handlePeerWS handshake). Control WS clients cannot set actorType=node —
+	// the server's dispatchAction rejects those messages with ErrCodeActorTypeNodeBlocked.
 	if actor.Type == "node" {
 		return &actor, nil
 	}

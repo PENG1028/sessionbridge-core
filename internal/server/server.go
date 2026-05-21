@@ -2,7 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +18,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/user/sessionnode/go-core/internal/dispatcher"
+	"github.com/user/sessionnode/go-core/internal/mesh"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
@@ -41,15 +46,21 @@ type Server struct {
 	wg           sync.WaitGroup
 	conns        map[*websocket.Conn]struct{}
 	connsMu      sync.Mutex
+
+	// Peer authentication — set server-side so peers cannot spoof actor type.
+	identity   *mesh.NodeIdentity
+	trustStore *mesh.TrustStore
+	peerConns  map[string]string // connID → peerNodeID
+	peerConnsMu sync.RWMutex
 }
 
 // New creates a Server. Call Start() to begin listening.
-func New(addr string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager) *Server {
-	return NewWithTLS(addr, "", "", d, s, cr, pm)
+func New(addr string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore) *Server {
+	return NewWithTLS(addr, "", "", d, s, cr, pm, identity, trustStore)
 }
 
 // NewWithTLS creates a Server with optional TLS. Leave certFile/keyFile empty for plain HTTP.
-func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager) *Server {
+func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore) *Server {
 	sv := &Server{
 		addr:         addr,
 		tlsCert:      certFile,
@@ -59,6 +70,9 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 		connRegistry: cr,
 		procManager:  pm,
 		conns:        make(map[*websocket.Conn]struct{}),
+		identity:     identity,
+		trustStore:   trustStore,
+		peerConns:    make(map[string]string),
 	}
 	sv.registerHandlers()
 	return sv
@@ -71,6 +85,7 @@ func (s *Server) registerHandlers() {
 	mux.HandleFunc("/api/sessions", s.handleSessions)
 	mux.HandleFunc("/api/processes", s.handleProcesses)
 	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/peer/ws", s.handlePeerWS)
 	s.httpServer = &http.Server{Addr: s.addr, Handler: mux}
 }
 
@@ -285,6 +300,260 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[ws] client disconnected from %s", r.RemoteAddr)
 }
 
+// handlePeerWS upgrades to WebSocket and performs a peer handshake
+// (challenge-response using ed25519) before accepting node-to-node messages.
+func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[peer-ws] upgrade error: %v", err)
+		return
+	}
+
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	s.addConn(conn)
+	defer s.removeConn(conn)
+
+	log.Printf("[peer-ws] new peer connection from %s", r.RemoteAddr)
+
+	// Step 1: Read peer.hello with 30s timeout.
+	helloMsg, err := s.readPeerMessage(conn, 30*time.Second)
+	if err != nil {
+		log.Printf("[peer-ws] handshake step 1 (hello) failed: %v", err)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerHandshakeFailed, "failed to read peer.hello: "+err.Error())
+		return
+	}
+	if helloMsg.Type != protocol.MsgTypePeerHello {
+		log.Printf("[peer-ws] expected peer.hello, got %q", helloMsg.Type)
+		_ = s.writePeerError(conn, helloMsg.RequestID, protocol.ErrCodePeerHandshakeFailed, "expected peer.hello")
+		return
+	}
+
+	peerNodeID := string(helloMsg.NodeID)
+
+	// Decode peer.hello payload.
+	var helloPayload struct {
+		PublicKey   string `json:"publicKey"`
+		Fingerprint string `json:"fingerprint"`
+		Timestamp   int64  `json:"timestamp"`
+	}
+	if err := json.Unmarshal(helloMsg.Payload, &helloPayload); err != nil {
+		log.Printf("[peer-ws] peer.hello payload decode: %v", err)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerHandshakeFailed, "invalid peer.hello payload")
+		return
+	}
+
+	// Step 2: Validate peer against trust store.
+	if s.trustStore == nil {
+		log.Printf("[peer-ws] no trust store configured, rejecting peer %s", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerUnknown, "no trust store configured")
+		return
+	}
+
+	trustedPeer, err := s.trustStore.Get(peerNodeID)
+	if err != nil {
+		log.Printf("[peer-ws] unknown peer %s: %v", peerNodeID, err)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerUnknown, "peer not in trust store: "+peerNodeID)
+		return
+	}
+
+	if trustedPeer.Status == mesh.TrustStatusRevoked {
+		log.Printf("[peer-ws] revoked peer %s", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerRevoked, "peer trust has been revoked: "+peerNodeID)
+		return
+	}
+
+	if trustedPeer.Status == mesh.TrustStatusExpired {
+		log.Printf("[peer-ws] expired trust for peer %s", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerExpired, "peer trust has expired: "+peerNodeID)
+		return
+	}
+
+	if trustedPeer.TrustExpiresAt > 0 && time.Now().UnixMilli() > trustedPeer.TrustExpiresAt {
+		log.Printf("[peer-ws] expired trust for peer %s (by timestamp)", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerExpired, "peer trust has expired: "+peerNodeID)
+		return
+	}
+
+	// Decode the presented public key from the hello payload.
+	peerPubKeyBytes, err := base64.StdEncoding.DecodeString(helloPayload.PublicKey)
+	if err != nil {
+		log.Printf("[peer-ws] invalid public key encoding from %s", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerHandshakeFailed, "invalid public key encoding")
+		return
+	}
+
+	// Verify public key matches trust store (compare raw bytes).
+	if len(trustedPeer.PublicKey) != len(peerPubKeyBytes) {
+		log.Printf("[peer-ws] public key length mismatch for %s", peerNodeID)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerKeyMismatch, "public key does not match trust store for: "+peerNodeID)
+		return
+	}
+	for i := range trustedPeer.PublicKey {
+		if trustedPeer.PublicKey[i] != peerPubKeyBytes[i] {
+			log.Printf("[peer-ws] public key mismatch for %s", peerNodeID)
+			_ = s.writePeerError(conn, "", protocol.ErrCodePeerKeyMismatch, "public key does not match trust store for: "+peerNodeID)
+			return
+		}
+	}
+
+	// Step 3: Generate challenge (32 random bytes, base64-encoded).
+	nonce := make([]byte, 32)
+	if _, err := rand.Read(nonce); err != nil {
+		log.Printf("[peer-ws] failed to generate nonce: %v", err)
+		_ = s.writePeerError(conn, "", protocol.ErrCodePeerHandshakeFailed, "internal error generating challenge")
+		return
+	}
+	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
+
+	challengeID := types.RequestID(fmt.Sprintf("chal-%s-%d", peerNodeID, time.Now().UnixNano()))
+	challengeMsg := protocol.NewPeerChallenge(challengeID, nonceB64)
+	if err := s.writePeerMessage(conn, challengeMsg, 30*time.Second); err != nil {
+		log.Printf("[peer-ws] failed to send challenge: %v", err)
+		return
+	}
+	log.Printf("[peer-ws] challenge sent to %s (requestId=%s)", peerNodeID, challengeID)
+
+	// Step 4: Read peer.response.
+	respMsg, err := s.readPeerMessage(conn, 30*time.Second)
+	if err != nil {
+		log.Printf("[peer-ws] handshake step 3 (response) failed: %v", err)
+		_ = s.writePeerError(conn, challengeID, protocol.ErrCodePeerHandshakeFailed, "failed to read peer.response: "+err.Error())
+		return
+	}
+	if respMsg.Type != protocol.MsgTypePeerResponse {
+		log.Printf("[peer-ws] expected peer.response, got %q", respMsg.Type)
+		_ = s.writePeerError(conn, challengeID, protocol.ErrCodePeerHandshakeFailed, "expected peer.response")
+		return
+	}
+
+	var respPayload struct {
+		Signature string `json:"signature"`
+	}
+	if err := json.Unmarshal(respMsg.Payload, &respPayload); err != nil {
+		log.Printf("[peer-ws] peer.response payload decode: %v", err)
+		_ = s.writePeerError(conn, challengeID, protocol.ErrCodePeerHandshakeFailed, "invalid peer.response payload")
+		return
+	}
+
+	sigBytes, err := base64.StdEncoding.DecodeString(respPayload.Signature)
+	if err != nil {
+		log.Printf("[peer-ws] invalid signature encoding from %s", peerNodeID)
+		_ = s.writePeerError(conn, challengeID, protocol.ErrCodePeerHandshakeFailed, "invalid signature encoding")
+		return
+	}
+
+	// Step 5: Verify signature against trusted public key.
+	if !ed25519.Verify(ed25519.PublicKey(peerPubKeyBytes), nonce, sigBytes) {
+		log.Printf("[peer-ws] signature verification failed for %s", peerNodeID)
+		_ = s.writePeerError(conn, challengeID, protocol.ErrCodePeerHandshakeFailed, "signature verification failed")
+		return
+	}
+
+	// Step 6: Send peer.welcome.
+	var serverNodeID types.NodeID
+	if s.identity != nil {
+		serverNodeID = types.NodeID(s.identity.NodeID)
+	}
+	welcomeMsg := protocol.NewPeerWelcome(serverNodeID)
+	if err := s.writePeerMessage(conn, welcomeMsg, 30*time.Second); err != nil {
+		log.Printf("[peer-ws] failed to send welcome: %v", err)
+		return
+	}
+
+	log.Printf("[peer-ws] handshake complete for peer %s", peerNodeID)
+
+	// Step 7: Register as peer connection (server-side tracking).
+	writeCh := make(chan []byte, 128)
+	var writeWg sync.WaitGroup
+	writeWg.Add(1)
+	go s.writeLoop(conn, writeCh, &writeWg)
+
+	wsConn := s.connRegistry.RegisterConn(writeCh, types.Actor{
+		Type: "node",
+		ID:   peerNodeID,
+	})
+	connID := wsConn.ID
+
+	s.peerConnsMu.Lock()
+	s.peerConns[connID] = peerNodeID
+	s.peerConnsMu.Unlock()
+
+	// Update last seen in trust store.
+	trustedPeer.LastSeen = time.Now().UnixMilli()
+
+	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
+	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
+
+	for {
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("[peer-ws] read error from %s: %v", peerNodeID, err)
+			}
+			break
+		}
+
+		resp := s.handleMessage(raw, connID)
+		if resp == nil {
+			continue
+		}
+
+		respBytes, err := resp.MarshalJSON()
+		if err != nil {
+			log.Printf("[peer-ws] marshal error: %v", err)
+			continue
+		}
+
+		select {
+		case writeCh <- respBytes:
+		default:
+			log.Printf("[peer-ws] write channel full, dropping response to %s", peerNodeID)
+		}
+	}
+
+	// Cleanup.
+	s.peerConnsMu.Lock()
+	delete(s.peerConns, connID)
+	s.peerConnsMu.Unlock()
+
+	s.connRegistry.UnregisterConn(connID)
+	close(writeCh)
+	writeWg.Wait()
+	conn.Close()
+	log.Printf("[peer-ws] peer %s disconnected", peerNodeID)
+}
+
+// readPeerMessage reads a single message from the peer with a timeout.
+func (s *Server) readPeerMessage(conn *websocket.Conn, timeout time.Duration) (*protocol.Message, error) {
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.UnmarshalMessage(raw)
+}
+
+// writePeerMessage writes a single message to the peer with a timeout.
+func (s *Server) writePeerMessage(conn *websocket.Conn, msg *protocol.Message, timeout time.Duration) error {
+	conn.SetWriteDeadline(time.Now().Add(timeout))
+	data, err := msg.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// writePeerError sends a peer.error message to the peer.
+func (s *Server) writePeerError(conn *websocket.Conn, requestID types.RequestID, code, message string) error {
+	return s.writePeerMessage(conn, protocol.NewPeerError(requestID, code, message), 5*time.Second)
+}
+
 // writeLoop reads from the channel and writes to the WebSocket connection.
 func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -321,11 +590,33 @@ func (s *Server) dispatchAction(msg *protocol.Message, connID string) *protocol.
 		capability = msg.Type
 	}
 
-	actorType := msg.ActorType
-	if actorType == "" {
-		actorType = "web"
-	}
+	// Determine actor type based on connection identity (server-side, not client-claimed).
+	actorType := "web"
 	actorID := msg.ActorID
+
+	// Check if this is a peer connection (authenticated via handlePeerWS handshake).
+	s.peerConnsMu.RLock()
+	peerNodeID, isPeer := s.peerConns[connID]
+	s.peerConnsMu.RUnlock()
+
+	if isPeer {
+		// Peer connections are trusted — set actor type server-side.
+		actorType = "node"
+		actorID = peerNodeID
+	} else {
+		// Control connections: if we have a trust store (authenticated mode),
+		// block clients that try to claim actorType=node. In dev/backward-compat
+		// mode (no trust store), allow the old behavior.
+		if msg.ActorType == "node" && s.trustStore != nil {
+			return protocol.NewError(msg.RequestID, protocol.ErrCodeActorTypeNodeBlocked,
+				"actorType=node is not allowed on control WS. Use /peer/ws for node-to-node connections.")
+		}
+		// Use client-provided actor type (defaults to "web").
+		if msg.ActorType != "" {
+			actorType = msg.ActorType
+		}
+	}
+
 	if actorID == "" {
 		actorID = string(msg.NodeID)
 	}

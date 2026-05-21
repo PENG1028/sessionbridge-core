@@ -21,4 +21,14 @@ const (
 	ErrCodePlanFailed        = "PLAN_FAILED"
 	ErrCodeApprovalRequired  = "APPROVAL_REQUIRED"
 	ErrCodeApprovalDenied    = "APPROVAL_DENIED"
+
+	// Peer handshake error codes.
+	ErrCodeActorTypeNodeBlocked = "ACTOR_TYPE_NODE_BLOCKED"
+	ErrCodePeerHandshakeFailed  = "PEER_HANDSHAKE_FAILED"
+	ErrCodePeerUnknown          = "PEER_UNKNOWN"
+	ErrCodePeerExpired          = "PEER_EXPIRED"
+	ErrCodePeerRevoked          = "PEER_REVOKED"
+	ErrCodePeerKeyMismatch      = "PEER_KEY_MISMATCH"
+	ErrCodeInviteInvalid        = "INVITE_INVALID"
+	ErrCodeInviteExpired        = "INVITE_EXPIRED"
 )

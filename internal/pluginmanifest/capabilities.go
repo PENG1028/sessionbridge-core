@@ -12,6 +12,19 @@ var KnownCapabilities = map[string]bool{
 	"node.health":     true,
 	"node.disconnect": true,
 
+	// Node — mesh security
+	"node.identity.get":     true,
+	"node.invite.create":    true,
+	"node.invite.list":      true,
+	"node.invite.revoke":    true,
+	"node.invite.accept":    true,
+	"node.peer.list":        true,
+	"node.peer.info":        true,
+	"node.peer.reconnect":   true,
+	"node.peer.disconnect":  true,
+	"node.peer.revoke":      true,
+	"node.reachability.check": true,
+
 	// Session
 	"session.create":  true,
 	"session.list":    true,

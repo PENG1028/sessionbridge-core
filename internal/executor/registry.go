@@ -6,6 +6,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/capability"
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
+	"github.com/user/sessionnode/go-core/internal/mesh"
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/platform"
@@ -60,6 +61,9 @@ type Deps struct {
 	// RunStore indexes long-lived execution resources (terminal sessions, processes, etc.).
 	// When nil, run capabilities degrade gracefully (empty list / not-found error).
 	RunStore *run.Store
+	// Mesh bundles cryptographic node identity and the trusted peer store.
+	// When nil, mesh/peer capabilities degrade gracefully.
+	Mesh *mesh.MeshState
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -202,4 +206,18 @@ func (r *Registry) registerDefaults() {
 	r.Register("run.info", runInfo)
 	r.Register("run.stop", runStop)
 	r.Register("run.updatePolicy", runUpdatePolicy)
+
+	r.Register("node.peer.list", nodePeerList)
+	r.Register("node.peer.info", nodePeerInfo)
+	r.Register("node.peer.reconnect", nodePeerReconnect)
+	r.Register("node.peer.disconnect", nodePeerDisconnect)
+	r.Register("node.peer.revoke", nodePeerRevoke)
+	r.Register("node.reachability.check", nodeReachabilityCheck)
+
+	// Mesh: identity & invite
+	r.Register("node.identity.get", nodeIdentityGet)
+	r.Register("node.invite.create", nodeInviteCreate)
+	r.Register("node.invite.list", nodeInviteList)
+	r.Register("node.invite.revoke", nodeInviteRevoke)
+	r.Register("node.invite.accept", nodeInviteAccept)
 }

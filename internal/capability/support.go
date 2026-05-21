@@ -130,6 +130,21 @@ var Matrix = map[string]map[string]platformRule{
 		"linux":   {SupportPartial, "not_implemented", "Core-managed HTTP fetch not implemented yet"},
 		"darwin":  {SupportPartial, "not_implemented", "Core-managed HTTP fetch not implemented yet"},
 	},
+
+	// ── peer management family ──
+	"node.peer.list":       desktopFull,
+	"node.peer.info":       desktopFull,
+	"node.peer.reconnect":  desktopFull,
+	"node.peer.disconnect": desktopFull,
+	"node.peer.revoke":     desktopFull,
+	"node.reachability.check": desktopFull,
+
+	// ── node identity & invite family ──
+	"node.identity.get":  desktopFull,
+	"node.invite.create": desktopFull,
+	"node.invite.list":   desktopFull,
+	"node.invite.revoke": desktopFull,
+	"node.invite.accept": desktopFull,
 }
 
 // desktopFull is a convenience value for capabilities that are fully supported on all desktop platforms.

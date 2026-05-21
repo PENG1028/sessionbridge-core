@@ -63,7 +63,7 @@ func testPeerNode(t *testing.T, id types.NodeID) (*server.Server, *httptest.Serv
 		id,
 	)
 
-	sv := server.New("", d, sessStore, cr, pm)
+	sv := server.New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return sv, httpSrv
@@ -573,7 +573,7 @@ func TestPeerTopology_WSClientCreateOnPeer(t *testing.T) {
 		"main",
 	)
 
-	sv := server.New(":0", d, sessStore, cr, pm)
+	sv := server.New(":0", d, sessStore, cr, pm, nil, nil)
 	mainHTTPSrv := httptest.NewServer(sv.Handler())
 	defer mainHTTPSrv.Close()
 
@@ -662,7 +662,7 @@ func TestPeerTopology_ListNodesViaWS(t *testing.T) {
 		"main",
 	)
 
-	sv := server.New(":0", d, sessStore, cr, pm)
+	sv := server.New(":0", d, sessStore, cr, pm, nil, nil)
 	mainHTTPSrv := httptest.NewServer(sv.Handler())
 	defer mainHTTPSrv.Close()
 
@@ -745,7 +745,7 @@ func TestPeerTopology_ActorTypeNodeBypass(t *testing.T) {
 		peerTopo,
 		"peer-node",
 	)
-	peerSrv := server.New("", d, sessStore, cr, pm)
+	peerSrv := server.New("", d, sessStore, cr, pm, nil, nil)
 	peerHTTPSrv := httptest.NewServer(peerSrv.Handler())
 	defer peerHTTPSrv.Close()
 
@@ -1273,7 +1273,7 @@ func testPeerNodeWithHistory(t *testing.T, id types.NodeID) (*server.Server, *ht
 		id,
 	)
 
-	sv := server.New("", d, sessStore, cr, pm)
+	sv := server.New("", d, sessStore, cr, pm, nil, nil)
 	httpSrv := httptest.NewServer(sv.Handler())
 	t.Cleanup(httpSrv.Close)
 	return sv, httpSrv, histStore, sessStore
@@ -1746,7 +1746,7 @@ func TestTwoCore_Scenario1B_TrueCrossNodeHistoryReplay(t *testing.T) {
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
 		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
 	)
-	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal)
+	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil)
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
 	t.Cleanup(localHTTPSrv.Close)
 	localAddr := peerAddr(localHTTPSrv)
@@ -2025,7 +2025,7 @@ func TestTwoCore_VPSSecondaryPermissionCheck(t *testing.T) {
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, vpsPerm,
 		nil, vpsExecReg, &silentAudit{}, vpsTopo, "node-vps",
 	)
-	vpsSrv := server.New("", dVPS, vpsSess, vpsCR, vpsPM)
+	vpsSrv := server.New("", dVPS, vpsSess, vpsCR, vpsPM, nil, nil)
 	vpsHTTPSrv := httptest.NewServer(vpsSrv.Handler())
 	t.Cleanup(vpsHTTPSrv.Close)
 	vpsAddr := peerAddr(vpsHTTPSrv)

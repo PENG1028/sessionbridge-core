@@ -14,6 +14,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/executor"
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/logs"
+	"github.com/user/sessionnode/go-core/internal/mesh"
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/permission"
 	"github.com/user/sessionnode/go-core/internal/plan"
@@ -48,8 +49,28 @@ func main() {
 
 	addr := getEnv("LISTEN_ADDR", cfg.Core.ListenAddr)
 
-	// Logging — structured rotating logs.
+	// Data directory — used by mesh, logging, and other subsystems.
 	logDir := getEnv("SESSIONNODE_DATA_DIR", cfg.Core.DataDir)
+
+	// Mesh: node identity and trust store for peer authentication.
+	nodeIdentity, err := mesh.LoadOrCreateIdentity(logDir, string(nodeID))
+	if err != nil {
+		log.Fatalf("mesh identity: %v", err)
+	}
+	// If nodeID was the default sentinel, adopt the deterministic ID from identity.
+	if nodeID == "node_local" {
+		nodeID = types.NodeID(nodeIdentity.NodeID)
+	}
+	log.Printf("[startup] node identity: nodeId=%s fingerprint=%s", nodeIdentity.NodeID, nodeIdentity.Fingerprint)
+
+	trustPath := filepath.Join(logDir, "trusted_peers.json")
+	trustStore := mesh.NewTrustStore(trustPath)
+	if err := trustStore.Load(); err != nil {
+		log.Printf("[startup] trust store load: %v (starting with empty store)", err)
+	}
+	log.Printf("[startup] trust store: %d trusted peer(s)", len(trustStore.List()))
+
+	// Logging — structured rotating logs.
 	_, auditLogger, err := logs.Setup(logDir, cfg.Core.Log.Level)
 	if err != nil {
 		log.Fatalf("logs.Setup: %v", err)
@@ -98,6 +119,7 @@ func main() {
 	topoCfg := topology.Config{
 		LocalID:   nodeID,
 		LocalName: cfg.Node.Name,
+		Identity:  nodeIdentity,
 		Peers:     peers,
 	}
 	topo := topology.New(topoCfg)
@@ -172,6 +194,7 @@ func main() {
 		History:    historyStore,
 		Manifests:  manifestReg,
 		RunStore:   runStore,
+		Mesh:       &mesh.MeshState{Identity: nodeIdentity, TrustStore: trustStore, InviteStore: mesh.NewInviteStore()},
 	}
 	execReg := executor.New(execDeps)
 
@@ -190,9 +213,9 @@ func main() {
 	// Server (with optional TLS)
 	var sv *server.Server
 	if tlsCert != "" && tlsKey != "" {
-		sv = server.NewWithTLS(addr, tlsCert, tlsKey, d, sessStore, connRegistry, procManager)
+		sv = server.NewWithTLS(addr, tlsCert, tlsKey, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore)
 	} else {
-		sv = server.New(addr, d, sessStore, connRegistry, procManager)
+		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore)
 	}
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")

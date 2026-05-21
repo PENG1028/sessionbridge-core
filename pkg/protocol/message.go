@@ -30,6 +30,13 @@ const (
 	MsgTypePluginCheck         = "plugin.check"
 	MsgTypePing                = "ping"
 	MsgTypePong                = "pong"
+
+	// Peer handshake message types.
+	MsgTypePeerHello     = "peer.hello"
+	MsgTypePeerChallenge = "peer.challenge"
+	MsgTypePeerResponse  = "peer.response"
+	MsgTypePeerWelcome   = "peer.welcome"
+	MsgTypePeerError     = "peer.error"
 )
 
 // Message is the universal WebSocket message envelope.
@@ -249,4 +256,76 @@ func NewPing() *Message {
 
 func NewPong() *Message {
 	return &Message{Type: MsgTypePong}
+}
+
+// --- Peer handshake messages ---
+
+// peerHelloPayload is the payload for peer.hello messages.
+type peerHelloPayload struct {
+	PublicKey   string `json:"publicKey"`   // base64
+	Fingerprint string `json:"fingerprint"` // hex
+	Timestamp   int64  `json:"timestamp"`
+}
+
+// peerChallengePayload is the payload for peer.challenge messages.
+type peerChallengePayload struct {
+	Nonce string `json:"nonce"` // base64
+}
+
+// peerResponsePayload is the payload for peer.response messages.
+type peerResponsePayload struct {
+	Signature string `json:"signature"` // base64
+}
+
+// NewPeerHello creates a peer.hello message for the peer handshake.
+func NewPeerHello(nodeID types.NodeID, publicKeyBase64, fingerprint string, timestamp int64) *Message {
+	payload, _ := json.Marshal(peerHelloPayload{
+		PublicKey:   publicKeyBase64,
+		Fingerprint: fingerprint,
+		Timestamp:   timestamp,
+	})
+	return &Message{
+		Type:      MsgTypePeerHello,
+		NodeID:    nodeID,
+		Payload:   payload,
+		Timestamp: timestamp,
+	}
+}
+
+// NewPeerChallenge creates a peer.challenge message with a random nonce.
+func NewPeerChallenge(requestID types.RequestID, nonceBase64 string) *Message {
+	payload, _ := json.Marshal(peerChallengePayload{Nonce: nonceBase64})
+	return &Message{
+		Type:      MsgTypePeerChallenge,
+		RequestID: requestID,
+		Payload:   payload,
+	}
+}
+
+// NewPeerResponse creates a peer.response message with a signature.
+func NewPeerResponse(requestID types.RequestID, signatureBase64 string) *Message {
+	payload, _ := json.Marshal(peerResponsePayload{Signature: signatureBase64})
+	return &Message{
+		Type:      MsgTypePeerResponse,
+		RequestID: requestID,
+		Payload:   payload,
+	}
+}
+
+// NewPeerWelcome creates a peer.welcome message.
+func NewPeerWelcome(nodeID types.NodeID) *Message {
+	return &Message{
+		Type:   MsgTypePeerWelcome,
+		NodeID: nodeID,
+	}
+}
+
+// NewPeerError creates a peer.error message.
+func NewPeerError(requestID types.RequestID, code, message string) *Message {
+	return &Message{
+		Type:      MsgTypePeerError,
+		RequestID: requestID,
+		OK:        false,
+		Error:     &types.CoreError{Code: code, Message: message},
+	}
 }

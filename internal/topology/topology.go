@@ -10,10 +10,13 @@ package topology
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 
 	"github.com/user/sessionnode/go-core/internal/dispatcher"
 	"github.com/user/sessionnode/go-core/internal/executor"
+	"github.com/user/sessionnode/go-core/internal/mesh"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -31,13 +35,14 @@ import (
 type Config struct {
 	LocalID   types.NodeID
 	LocalName string         // from node.name, used as base for display naming
+	Identity  *mesh.NodeIdentity // local node identity for peer handshake
 	Peers     []PeerConfig
 }
 
 // PeerConfig describes a remote peer to connect to.
 type PeerConfig struct {
 	ID      types.NodeID `json:"id"`
-	Address string       `json:"address"`          // "host:port"
+	Address string       `json:"address"`          // "host:port" or full "ws://host:port/path"
 	Tags    []string     `json:"tags,omitempty"`   // e.g. ["local"]
 }
 
@@ -93,6 +98,7 @@ type StreamChunkHandler func(msg *protocol.Message)
 type PeerTopology struct {
 	localID   types.NodeID
 	localName string
+	identity  *mesh.NodeIdentity
 	peers     map[types.NodeID]*Peer
 
 	pending   map[types.RequestID]chan *types.CapabilityResponse
@@ -110,6 +116,7 @@ func New(cfg Config) *PeerTopology {
 	pt := &PeerTopology{
 		localID:   cfg.LocalID,
 		localName: cfg.LocalName,
+		identity:  cfg.Identity,
 		peers:     make(map[types.NodeID]*Peer),
 		pending:   make(map[types.RequestID]chan *types.CapabilityResponse),
 		log:       log.New(log.Writer(), "[topology] ", log.LstdFlags),
@@ -264,9 +271,14 @@ func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*type
 		TargetNodeID: req.TargetNodeID,
 		Payload:      payload,
 		Timestamp:    time.Now().UnixMilli(),
-		ActorType:    "node", // marks as node-to-node, skips token auth
 		ActorID:      string(pt.localID),
 	}
+
+	// Mark as node-to-node. When connected via /peer/ws, the server overrides
+	// actorType server-side so the client-set value is irrelevant. When connected
+	// via /ws (backward compat, identity=nil), the server allows actorType=node
+	// only if no trust store is configured.
+	msg.ActorType = "node"
 
 	data, err := msg.MarshalJSON()
 	if err != nil {
@@ -348,6 +360,21 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 // Connection management
 // ---------------------------------------------------------------------------
 
+// peerURL builds the WebSocket URL for a peer from its address.
+// If the address starts with "ws://" or "wss://", it is used as-is.
+// Otherwise, it is treated as "host:port" and converted to the appropriate path:
+//   - "/peer/ws" when identity is configured (authenticated peer handshake)
+//   - "/ws" when identity is nil (backward compat, unauthenticated)
+func (pt *PeerTopology) peerURL(address string) string {
+	if strings.HasPrefix(address, "ws://") || strings.HasPrefix(address, "wss://") {
+		return address
+	}
+	if pt.identity != nil {
+		return fmt.Sprintf("ws://%s/peer/ws", address)
+	}
+	return fmt.Sprintf("ws://%s/ws", address)
+}
+
 // connectLoop attempts to maintain a persistent WebSocket connection to peer.
 // It retries with exponential backoff on failure.
 func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
@@ -365,15 +392,14 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 		peer.status = StatusConnecting
 		peer.mu.Unlock()
 
-		conn, _, err := websocket.DefaultDialer.Dial(
-			fmt.Sprintf("ws://%s/ws", peer.Address), nil,
-		)
+		url := pt.peerURL(peer.Address)
+		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			peer.mu.Lock()
 			peer.status = StatusDisconnected
 			peer.mu.Unlock()
 
-			pt.log.Printf("connect to %s (%s) failed: %v, retry in %v", peer.ID, peer.Address, err, backoff)
+			pt.log.Printf("connect to %s (%s) failed: %v, retry in %v", peer.ID, url, err, backoff)
 
 			select {
 			case <-time.After(backoff):
@@ -388,6 +414,30 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 			continue
 		}
 
+		// Perform peer handshake only if identity is configured.
+		if pt.identity != nil {
+			if err := pt.peerHandshake(conn, peer.ID); err != nil {
+				pt.log.Printf("handshake with %s failed: %v", peer.ID, err)
+				conn.Close()
+
+				peer.mu.Lock()
+				peer.status = StatusDisconnected
+				peer.mu.Unlock()
+
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return
+				}
+
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
+			}
+		}
+
 		backoff = 1 * time.Second // reset on success
 
 		writeCh := make(chan []byte, 64)
@@ -399,7 +449,7 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 		peer.status = StatusConnected
 		peer.mu.Unlock()
 
-		pt.log.Printf("connected to peer %s (%s)", peer.ID, peer.Address)
+		pt.log.Printf("connected to peer %s (%s)", peer.ID, url)
 
 		// Write goroutine — reads from writeCh and sends over WebSocket
 		go func() {
@@ -442,6 +492,102 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 
 		pt.log.Printf("disconnected from peer %s, reconnecting...", peer.ID)
 	}
+}
+
+// peerHandshake performs the client side of the peer handshake over the given
+// WebSocket connection.
+//
+// Flow:
+//  1. Send peer.hello with own identity
+//  2. Read peer.challenge
+//  3. Sign the nonce with private key
+//  4. Send peer.response with signature
+//  5. Read peer.welcome
+func (pt *PeerTopology) peerHandshake(conn *websocket.Conn, peerID types.NodeID) error {
+	if pt.identity == nil {
+		return fmt.Errorf("no local identity configured")
+	}
+
+	// Step 1: Send peer.hello.
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pt.identity.PublicKey)
+	helloMsg := protocol.NewPeerHello(
+		types.NodeID(pt.identity.NodeID),
+		pubKeyB64,
+		pt.identity.Fingerprint,
+		time.Now().UnixMilli(),
+	)
+	if err := writeMessage(conn, helloMsg, 30*time.Second); err != nil {
+		return fmt.Errorf("send peer.hello: %w", err)
+	}
+
+	// Step 2: Read peer.challenge.
+	challengeMsg, err := readMessage(conn, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("read peer.challenge: %w", err)
+	}
+	if challengeMsg.Type != protocol.MsgTypePeerChallenge {
+		return fmt.Errorf("expected peer.challenge, got %q", challengeMsg.Type)
+	}
+	if challengeMsg.Error != nil {
+		return fmt.Errorf("peer error: %s - %s", challengeMsg.Error.Code, challengeMsg.Error.Message)
+	}
+
+	var chalPayload struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(challengeMsg.Payload, &chalPayload); err != nil {
+		return fmt.Errorf("decode peer.challenge payload: %w", err)
+	}
+
+	nonce, err := base64.StdEncoding.DecodeString(chalPayload.Nonce)
+	if err != nil {
+		return fmt.Errorf("decode nonce: %w", err)
+	}
+
+	// Step 3: Sign the nonce.
+	signature := ed25519.Sign(ed25519.PrivateKey(pt.identity.PrivateKey), nonce)
+	sigB64 := base64.StdEncoding.EncodeToString(signature)
+
+	// Step 4: Send peer.response.
+	respMsg := protocol.NewPeerResponse(challengeMsg.RequestID, sigB64)
+	if err := writeMessage(conn, respMsg, 30*time.Second); err != nil {
+		return fmt.Errorf("send peer.response: %w", err)
+	}
+
+	// Step 5: Read peer.welcome.
+	welcomeMsg, err := readMessage(conn, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("read peer.welcome: %w", err)
+	}
+	if welcomeMsg.Type != protocol.MsgTypePeerWelcome {
+		return fmt.Errorf("expected peer.welcome, got %q", welcomeMsg.Type)
+	}
+	if welcomeMsg.Error != nil {
+		return fmt.Errorf("peer error during welcome: %s - %s", welcomeMsg.Error.Code, welcomeMsg.Error.Message)
+	}
+
+	pt.log.Printf("handshake with %s complete: remote node %s", peerID, welcomeMsg.NodeID)
+	return nil
+}
+
+// writeMessage writes a message to the WebSocket connection with a timeout.
+func writeMessage(conn *websocket.Conn, msg *protocol.Message, timeout time.Duration) error {
+	conn.SetWriteDeadline(time.Now().Add(timeout))
+	data, err := msg.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// readMessage reads a single message from the WebSocket connection with a timeout.
+func readMessage(conn *websocket.Conn, timeout time.Duration) (*protocol.Message, error) {
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.UnmarshalMessage(raw)
 }
 
 // ---------------------------------------------------------------------------
