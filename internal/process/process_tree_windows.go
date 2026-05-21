@@ -4,15 +4,16 @@ package process
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // childrenOf returns direct child PIDs using wmic.
 // Returns an empty slice (not an error) if wmic is unavailable or returns no matches.
+//
+// Note: wmic outputs UTF-16LE on some systems, which contains null bytes.
+// We strip null bytes before parsing.
 func childrenOf(pid int) ([]int, error) {
 	cmd := exec.Command("cmd", "/c",
 		fmt.Sprintf("wmic process where (ParentProcessId=%d) get ProcessId /format:value", pid))
@@ -21,16 +22,25 @@ func childrenOf(pid int) ([]int, error) {
 		// wmic may not be available; treat as no children.
 		return nil, nil
 	}
+
+	// Strip null bytes (wmic may output UTF-16LE).
+	clean := strings.Map(func(r rune) rune {
+		if r == 0 {
+			return -1
+		}
+		return r
+	}, string(out))
+
 	var pids []int
-	for _, line := range strings.Split(string(out), "\r\n") {
+	for _, line := range strings.Split(clean, "\r\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || line == "No Instance(s) Available." {
 			continue
 		}
 		if strings.HasPrefix(line, "ProcessId=") {
 			val := strings.TrimPrefix(line, "ProcessId=")
 			val = strings.TrimSpace(val)
-			if p, err := strconv.Atoi(val); err == nil && p > 0 {
+			if p, err := strconv.Atoi(val); err == nil && p > 0 && p != pid {
 				pids = append(pids, p)
 			}
 		}
@@ -58,30 +68,29 @@ func descendantsOf(pid int) ([]int, error) {
 	return result, nil
 }
 
-// signalByPID sends a signal to a process by PID on Windows.
+// signalByPID sends a signal to a process by PID on Windows using taskkill.
 //
-// Signal mapping:
-//   - "kill", "SIGKILL"  -> os.Kill
-//   - "interrupt", "SIGINT" -> os.Interrupt (maps to CTRL+BREAK on Windows)
-//   - "terminate", "SIGTERM" (default) -> os.Kill
+// Note: os.FindProcess().Kill() on Windows opens the process without
+// PROCESS_TERMINATE rights, so it fails with "Access is denied". We use
+// taskkill instead, which works for any process owned by the current user.
+//
+// On Windows, taskkill without /F can only terminate GUI processes that
+// respond to WM_CLOSE. Console applications require /F. Therefore all
+// signals use /F (force) on this platform.
+//
+// If the process is already gone (taskkill reports "not found"), we treat
+// that as a success — the kill target was already achieved.
 func signalByPID(pid int, signal string) error {
-	p, err := os.FindProcess(pid)
+	cmd := exec.Command("cmd", "/c",
+		fmt.Sprintf("taskkill /PID %d /F", pid))
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("find process %d: %w", pid, err)
-	}
-
-	switch signal {
-	case "interrupt", "SIGINT":
-		// os.Interrupt on Windows sends os.Kill actually — but try interrupt first.
-		if err := p.Signal(os.Interrupt); err != nil {
-			return p.Signal(os.Kill)
+		outStr := string(out)
+		// "not found" means the process already exited — treat as success.
+		if strings.Contains(outStr, "not found") {
+			return nil
 		}
-		return nil
-	default:
-		// On Windows, SIGTERM/SIGKILL both map to os.Kill
-		return p.Signal(os.Kill)
+		return fmt.Errorf("taskkill %d: %w\noutput: %s", pid, err, outStr)
 	}
+	return nil
 }
-
-// Ensure syscall is referenced (though unused on Windows, kept for compatibility).
-var _ = syscall.StringToUTF16

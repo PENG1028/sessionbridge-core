@@ -792,7 +792,7 @@ func checkDeps(t *testing.T, checks []pluginmanifest.EnvCheckSpec) *Deps {
 	deps := fullPluginDeps(t)
 	deps.Manifests = &mockManifestLoader{
 		manifest: &pluginmanifest.Manifest{
-			ID:   "test-plugin",
+			ID: "test-plugin",
 			Core: &pluginmanifest.CoreSpec{
 				Environment: pluginmanifest.EnvironmentSpec{
 					Checks: checks,
@@ -1061,7 +1061,7 @@ func capCheckDeps(t *testing.T, pluginID string, perms []pluginmanifest.Permissi
 		manifest: &pluginmanifest.Manifest{
 			ID: pluginID,
 			Core: &pluginmanifest.CoreSpec{
-				Permissions:  perms,
+				Permissions: perms,
 				Environment: pluginmanifest.EnvironmentSpec{},
 			},
 		},
@@ -1787,7 +1787,7 @@ func TestPluginPermissionsList_WithGrant(t *testing.T) {
 	deps := fullPluginDeps(t)
 	deps.Manifests = &mockManifestLoader{
 		manifest: &pluginmanifest.Manifest{
-			ID:   "test-plugin",
+			ID: "test-plugin",
 			Core: &pluginmanifest.CoreSpec{
 				Permissions: []pluginmanifest.PermissionSpec{
 					{
@@ -3026,5 +3026,218 @@ func TestRegisteredRunCapabilitiesInHandlers(t *testing.T) {
 		if !ok {
 			t.Errorf("run capability %q not registered in handlers", cap)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// process.signal + run.stop with tree=true
+// ---------------------------------------------------------------------------
+
+func TestProcessSignal_TreeTrue_PassesToManager(t *testing.T) {
+	deps := testDeps(t)
+	pm := deps.Processes
+	r := New(deps)
+
+	// Spawn a long-running process.
+	sleepBin := testutil.SleepBinary(t)
+	spawn := execOK(t, r, "process.spawn", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+	})
+	sid := spawn["sessionId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify process is running.
+	proc := pm.Get(types.SessionID(sid))
+	if proc == nil || proc.State != "running" {
+		t.Fatal("process should be running")
+	}
+
+	// Send process.signal with tree=true.
+	result := execOK(t, r, "process.signal", map[string]interface{}{
+		"sessionId": sid,
+		"signal":    "SIGKILL",
+		"tree":      true,
+	})
+
+	if result["sessionId"] != sid {
+		t.Errorf("sessionId = %v, want %s", result["sessionId"], sid)
+	}
+	if result["tree"] != true {
+		t.Errorf("tree = %v, want true", result["tree"])
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Verify process was signaled.
+	proc = pm.Get(types.SessionID(sid))
+	if proc != nil && proc.State != "exited" {
+		t.Errorf("expected exited after tree=true signal, got %s", proc.State)
+	}
+}
+
+func TestProcessSignal_TreeFalse_OnlyTarget(t *testing.T) {
+	deps := testDeps(t)
+	pm := deps.Processes
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	spawn := execOK(t, r, "process.spawn", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+	})
+	sid := spawn["sessionId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Send process.signal with tree=false (default).
+	result := execOK(t, r, "process.signal", map[string]interface{}{
+		"sessionId": sid,
+		"signal":    "SIGKILL",
+		"tree":      false,
+	})
+
+	if result["tree"] != false {
+		t.Errorf("tree = %v, want false", result["tree"])
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	proc := pm.Get(types.SessionID(sid))
+	if proc != nil && proc.State != "exited" {
+		t.Errorf("expected exited after tree=false signal, got %s", proc.State)
+	}
+}
+
+func TestProcessSignal_TreeDefault_IsFalse(t *testing.T) {
+	// When tree is omitted, it should default to false (unchanged behavior).
+	deps := testDeps(t)
+	pm := deps.Processes
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	spawn := execOK(t, r, "process.spawn", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+	})
+	sid := spawn["sessionId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Send process.signal without tree field — should default to false.
+	result := execOK(t, r, "process.signal", map[string]interface{}{
+		"sessionId": sid,
+		"signal":    "SIGKILL",
+	})
+
+	// tree defaults to false (Go bool zero value).
+	if result["tree"] != false {
+		t.Errorf("tree = %v, want false (default)", result["tree"])
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	proc := pm.Get(types.SessionID(sid))
+	if proc != nil && proc.State != "exited" {
+		t.Errorf("expected exited, got %s", proc.State)
+	}
+}
+
+func TestRunStop_TreeTrue_PassesToManager(t *testing.T) {
+	deps := testDeps(t)
+	pm := deps.Processes
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+		"label":   "tree-true-test",
+	})
+	runID := create["runId"].(string)
+	sid := create["sessionId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify process is running.
+	proc := pm.Get(types.SessionID(sid))
+	if proc == nil || proc.State != "running" {
+		t.Fatal("process should be running after run.create")
+	}
+
+	// Send run.stop with tree=true.
+	stop := execOK(t, r, "run.stop", map[string]interface{}{
+		"runId":  runID,
+		"signal": "SIGTERM",
+		"tree":   true,
+	})
+
+	if stop["state"] != "stopped" {
+		t.Errorf("state = %v, want stopped", stop["state"])
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Verify run state updated.
+	info := execOK(t, r, "run.info", map[string]string{"runId": runID})
+	if info["state"] != "stopped" {
+		t.Errorf("run state = %v, want stopped", info["state"])
+	}
+
+	// Verify process was signaled.
+	proc = pm.Get(types.SessionID(sid))
+	if proc != nil && proc.State != "exited" {
+		t.Errorf("expected exited after run.stop tree=true, got %s", proc.State)
+	}
+}
+
+func TestRunStop_TreeDefault_IsFalse(t *testing.T) {
+	// When tree is omitted from run.stop, it defaults to false.
+	deps := testDeps(t)
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+		"label":   "tree-default-test",
+	})
+	runID := create["runId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Send run.stop without tree field.
+	stop := execOK(t, r, "run.stop", map[string]interface{}{
+		"runId":  runID,
+		"signal": "SIGTERM",
+	})
+
+	if stop["state"] != "stopped" {
+		t.Errorf("state = %v, want stopped", stop["state"])
+	}
+}
+
+func TestRunStop_MissingSignal_DefaultsToSIGTERM(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"30"},
+		"label":   "default-signal-test",
+	})
+	runID := create["runId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Send run.stop without signal — defaults to SIGTERM.
+	stop := execOK(t, r, "run.stop", map[string]interface{}{
+		"runId": runID,
+	})
+
+	if stop["state"] != "stopped" {
+		t.Errorf("state = %v, want stopped", stop["state"])
 	}
 }
