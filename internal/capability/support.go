@@ -110,7 +110,7 @@ var Matrix = map[string]map[string]platformRule{
 	"run.info":         desktopFull,
 	"run.stop":         desktopFull,
 	"run.updatePolicy": desktopFull,
-
+	"run.attach":       desktopFull,
 
 		// ── logs & audit family ──
 		"logs.tail":  desktopFull,

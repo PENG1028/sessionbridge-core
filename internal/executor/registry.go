@@ -304,6 +304,7 @@ func (r *Registry) registerDefaults() {
 	r.Register("run.info", runInfo)
 	r.Register("run.stop", runStop)
 	r.Register("run.updatePolicy", runUpdatePolicy)
+	r.Register("run.attach", runAttach)
 
 	r.Register("node.peer.list", nodePeerList)
 	r.Register("node.peer.info", nodePeerInfo)

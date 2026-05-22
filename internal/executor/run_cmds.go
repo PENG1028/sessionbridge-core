@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/pkg/types"
@@ -335,6 +336,122 @@ func runUpdatePolicy(req *types.CapabilityRequest, deps *Deps) (interface{}, err
 	}
 
 	return runToMap(r), nil
+}
+
+// ── run.attach ───────────────────────────────────────────────────────────
+
+type runAttachPayload struct {
+	RunID       string   `json:"runId"`
+	StreamTypes []string `json:"streamTypes,omitempty"`
+	Replay      *bool    `json:"replay,omitempty"`
+	FromSeq     int64    `json:"fromSeq,omitempty"`
+}
+
+func runAttach(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var p runAttachPayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	if p.RunID == "" {
+		return nil, fmt.Errorf("runId is required")
+	}
+
+	// Default stream types
+	if len(p.StreamTypes) == 0 {
+		p.StreamTypes = []string{"stdout", "stderr"}
+	}
+
+	// Default replay to true
+	replay := true
+	if p.Replay != nil {
+		replay = *p.Replay
+	}
+
+	if deps.RunStore == nil {
+		return nil, fmt.Errorf("run not found: %s", p.RunID)
+	}
+
+	r := deps.RunStore.Get(p.RunID)
+	if r == nil {
+		return nil, fmt.Errorf("run not found: %s", p.RunID)
+	}
+
+	// Build result from run record
+	result := runToMap(r)
+
+	// Attach process snapshot if available
+	if r.ProcessID != "" && deps.Processes != nil {
+		proc := deps.Processes.Get(r.ProcessID)
+		if proc != nil {
+			cmdPath := ""
+			if proc.Cmd != nil {
+				cmdPath = proc.Cmd.Path
+			}
+			result["process"] = map[string]interface{}{
+				"sessionId": string(proc.SessionID),
+				"pid":       proc.PID,
+				"state":     proc.State,
+				"exitCode":  proc.ExitCode,
+				"command":   cmdPath,
+				"createdAt": proc.CreatedAt,
+			}
+			// Sync run state if process has exited
+			if proc.State == "exited" && r.State == run.StateRunning {
+				deps.RunStore.UpdateState(r.RunID, run.StateExited)
+				result["state"] = run.StateExited
+			}
+		}
+	}
+
+	// Build stream subscription info
+	// Option A: run.attach returns metadata only; caller uses stream.subscribe separately.
+	isRunning := result["state"] == run.StateRunning
+	subs := make([]map[string]interface{}, len(p.StreamTypes))
+	for i, st := range p.StreamTypes {
+		if isRunning {
+			subs[i] = map[string]interface{}{
+				"streamType": st,
+				"subscribed": false,
+				"reason":     "call stream.subscribe after attach",
+			}
+		} else {
+			subs[i] = map[string]interface{}{
+				"streamType": st,
+				"subscribed": false,
+				"reason":     fmt.Sprintf("run is %s", result["state"]),
+			}
+		}
+	}
+	result["streamSubscriptions"] = subs
+
+	// Replay history if requested
+	if replay && deps.History != nil {
+		replayData := make(map[string][]map[string]interface{})
+		for _, st := range p.StreamTypes {
+			events, err := deps.History.Replay(r.SessionID, st, types.EventSeq(p.FromSeq))
+			if err != nil {
+				if history.IsHistoryDisabled(err) {
+					replayData[st] = []map[string]interface{}{}
+					continue
+				}
+				replayData[st] = []map[string]interface{}{}
+				continue
+			}
+			out := make([]map[string]interface{}, len(events))
+			for j, evt := range events {
+				out[j] = map[string]interface{}{
+					"seq":        evt.EventSeq,
+					"data":       evt.Data,
+					"streamType": evt.Stream,
+					"timestamp":  evt.Timestamp,
+				}
+			}
+			replayData[st] = out
+		}
+		result["replay"] = replayData
+	}
+
+	return result, nil
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────

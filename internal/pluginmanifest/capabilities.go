@@ -142,6 +142,7 @@ var KnownCapabilities = map[string]bool{
 	"run.info":         true,
 	"run.stop":         true,
 	"run.updatePolicy": true,
+	"run.attach":       true,
 
 	// Network
 	"network.connect": true,

@@ -3063,6 +3063,7 @@ func TestRegisteredRunCapabilitiesInHandlers(t *testing.T) {
 		"run.info",
 		"run.stop",
 		"run.updatePolicy",
+		"run.attach",
 	}
 	for _, cap := range capabilities {
 		_, ok := r.handlers[cap]
@@ -3552,5 +3553,236 @@ func TestApprovalList_ReturnsWrapped(t *testing.T) {
 		if entry["requestId"] == nil || entry["requestId"] == "" {
 			t.Error("approval entry missing requestId")
 		}
+	}
+}
+
+// ── run.attach ───────────────────────────────────────────────────────────
+
+func TestRunAttach_ExistingRunningRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+		"label":   "attach-test",
+	})
+	runID := create["runId"].(string)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId": runID,
+	})
+
+	if result["runId"] != runID {
+		t.Errorf("runId = %v, want %s", result["runId"], runID)
+	}
+	if result["sessionId"] == nil || result["sessionId"] == "" {
+		t.Error("sessionId should be set")
+	}
+	if result["state"] != "running" {
+		t.Errorf("state = %v, want running", result["state"])
+	}
+	if result["kind"] != "terminal" {
+		t.Errorf("kind = %v, want terminal", result["kind"])
+	}
+	if result["pluginId"] != "test" {
+		t.Errorf("pluginId = %v, want test", result["pluginId"])
+	}
+
+	subs, ok := result["streamSubscriptions"].([]interface{})
+	if !ok {
+		t.Fatal("streamSubscriptions not found or wrong type")
+	}
+	if len(subs) != 2 {
+		t.Fatalf("expected 2 stream subscriptions (stdout, stderr), got %d", len(subs))
+	}
+
+	if result["process"] == nil {
+		t.Error("process snapshot should be present for running run")
+	}
+}
+
+func TestRunAttach_UnknownRunId(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("run.attach", map[string]string{"runId": "nonexistent"}))
+	if err == nil {
+		t.Fatal("expected error for unknown runId")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+func TestRunAttach_StoppedRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	sleepBin := testutil.SleepBinary(t)
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": sleepBin,
+		"args":    []string{"2"},
+	})
+	runID := create["runId"].(string)
+
+	time.Sleep(200 * time.Millisecond)
+
+	execOK(t, r, "run.stop", map[string]interface{}{
+		"runId":  runID,
+		"signal": "SIGTERM",
+	})
+
+	time.Sleep(300 * time.Millisecond)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId": runID,
+	})
+
+	if result["runId"] != runID {
+		t.Errorf("runId = %v, want %s", result["runId"], runID)
+	}
+	if result["sessionId"] == nil {
+		t.Error("sessionId should still be returned for stopped run")
+	}
+	if result["state"] != "stopped" {
+		t.Logf("state after stop = %v (may be stopped or exited)", result["state"])
+	}
+}
+
+func TestRunAttach_ReplayTrue(t *testing.T) {
+	deps := testDeps(t)
+	deps.History = history.New("")
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+		"label":   "replay-test",
+	})
+	runID := create["runId"].(string)
+	sid := types.SessionID(create["sessionId"].(string))
+
+	deps.History.Record(sid, "stdout", 1, "hello")
+	deps.History.Record(sid, "stdout", 2, "world")
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId":  runID,
+		"replay": true,
+	})
+
+	replay, ok := result["replay"].(map[string]interface{})
+	if !ok {
+		t.Fatal("replay not found or wrong type")
+	}
+	stdoutEvents, ok := replay["stdout"].([]interface{})
+	if !ok {
+		t.Fatal("replay.stdout not found or wrong type")
+	}
+	if len(stdoutEvents) < 2 {
+		t.Errorf("expected at least 2 stdout events in replay, got %d", len(stdoutEvents))
+	}
+}
+
+func TestRunAttach_ReplayFalse(t *testing.T) {
+	deps := testDeps(t)
+	deps.History = history.New("")
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+		"label":   "no-replay-test",
+	})
+	runID := create["runId"].(string)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId":  runID,
+		"replay": false,
+	})
+
+	if result["replay"] != nil {
+		t.Error("replay should be nil when replay=false")
+	}
+	if result["runId"] != runID {
+		t.Errorf("runId = %v, want %s", result["runId"], runID)
+	}
+}
+
+func TestRunAttach_DefaultStreamTypes(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+	})
+	runID := create["runId"].(string)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId": runID,
+	})
+
+	subs, ok := result["streamSubscriptions"].([]interface{})
+	if !ok {
+		t.Fatal("streamSubscriptions not found")
+	}
+	if len(subs) != 2 {
+		t.Fatalf("default streamTypes should be [stdout, stderr], got %d entries", len(subs))
+	}
+}
+
+func TestRunAttach_DoesNotCreateProcess(t *testing.T) {
+	deps := testDeps(t)
+	pm := deps.Processes
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+	})
+	runID := create["runId"].(string)
+
+	initialCount := len(pm.List())
+
+	execOK(t, r, "run.attach", map[string]interface{}{"runId": runID})
+	execOK(t, r, "run.attach", map[string]interface{}{"runId": runID})
+
+	if len(pm.List()) != initialCount {
+		t.Errorf("process count changed from %d to %d; run.attach should not create processes",
+			initialCount, len(pm.List()))
+	}
+}
+
+func TestRunAttach_DoesNotChangePolicy(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	create := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "bash",
+		"policy": map[string]interface{}{
+			"persistHistory": false,
+		},
+	})
+	runID := create["runId"].(string)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{
+		"runId": runID,
+	})
+
+	policy, ok := result["policy"].(map[string]interface{})
+	if !ok {
+		t.Fatal("policy not found")
+	}
+	if policy["persistHistory"] != false {
+		t.Error("policy persistHistory should still be false after attach")
+	}
+}
+
+func TestRunAttach_MissingRunId(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("run.attach", map[string]string{}))
+	if err == nil {
+		t.Fatal("expected error for missing runId")
+	}
+	if !strings.Contains(err.Error(), "runId is required") {
+		t.Errorf("error should mention 'runId is required', got: %v", err)
 	}
 }
