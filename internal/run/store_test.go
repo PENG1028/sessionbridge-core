@@ -144,7 +144,7 @@ func TestStore_UpdatePolicy(t *testing.T) {
 	}
 }
 
-func TestStore_UpdatePolicy_RejectsRestartRestore(t *testing.T) {
+func TestStore_UpdatePolicy_AcceptsRestartRestore(t *testing.T) {
 	s := NewStore()
 	r := s.Create(&Run{NodeID: "n1", Kind: KindTerminal})
 
@@ -153,8 +153,12 @@ func TestStore_UpdatePolicy_RejectsRestartRestore(t *testing.T) {
 		OnCoreShutdown: OnCoreShutdownTerminate,
 		RestartRestore: true,
 	})
-	if err == nil {
-		t.Fatal("expected error for restartRestore=true")
+	if err != nil {
+		t.Fatalf("expected restartRestore=true to be accepted, got: %v", err)
+	}
+	got := s.Get(r.RunID)
+	if !got.Policy.RestartRestore {
+		t.Error("RestartRestore should be true")
 	}
 }
 
@@ -234,11 +238,11 @@ func TestValidatePolicy_ValidDefaults(t *testing.T) {
 	}
 }
 
-func TestValidatePolicy_RejectsRestartRestore(t *testing.T) {
+func TestValidatePolicy_AcceptsRestartRestore(t *testing.T) {
 	p := DefaultPolicy()
 	p.RestartRestore = true
-	if msg := ValidatePolicy(p); msg == "" {
-		t.Error("expected error for restartRestore=true")
+	if msg := ValidatePolicy(p); msg != "" {
+		t.Errorf("expected restartRestore=true to be accepted, got: %s", msg)
 	}
 }
 
@@ -252,8 +256,130 @@ func TestValidatePolicy_RejectsUnsupportedOnDisconnect(t *testing.T) {
 
 func TestValidatePolicy_RejectsUnsupportedOnCoreShutdown(t *testing.T) {
 	p := DefaultPolicy()
-	p.OnCoreShutdown = "keep_running"
+	p.OnCoreShutdown = "leave_running"
 	if msg := ValidatePolicy(p); msg == "" {
 		t.Error("expected error for unsupported onCoreShutdown")
+	}
+}
+
+func TestValidatePolicy_AcceptsOnCoreShutdownKeepRunning(t *testing.T) {
+	p := DefaultPolicy()
+	p.OnCoreShutdown = OnCoreShutdownKeepRunning
+	if msg := ValidatePolicy(p); msg != "" {
+		t.Errorf("expected onCoreShutdown=%q to be accepted, got: %s", OnCoreShutdownKeepRunning, msg)
+	}
+}
+
+func TestStore_Persistence_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runs.json"
+
+	s1, err := NewStoreWithPath(path)
+	if err != nil {
+		t.Fatalf("NewStoreWithPath: %v", err)
+	}
+
+	r := s1.Create(&Run{
+		NodeID:   "n1",
+		Kind:     KindTerminal,
+		Label:    "persist-test",
+		PluginID: "terminal",
+		Policy:   DefaultPolicy(),
+	})
+
+	// Read back from a fresh store
+	s2, err := LoadFromDisk(path)
+	if err != nil {
+		t.Fatalf("LoadFromDisk: %v", err)
+	}
+
+	got := s2.Get(r.RunID)
+	if got == nil {
+		t.Fatal("run not found after reload")
+	}
+	if got.Label != "persist-test" {
+		t.Errorf("Label = %q, want %q", got.Label, "persist-test")
+	}
+	if got.State != StateRunning {
+		t.Errorf("State = %q, want %q", got.State, StateRunning)
+	}
+}
+
+func TestStore_Persistence_CounterRecovery(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runs.json"
+
+	s1, _ := NewStoreWithPath(path)
+	s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+	s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+	s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+
+	s2, _ := LoadFromDisk(path)
+	// Counter should be >= 3 so next run ID is new
+	r := s2.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+	if r.RunID == "" {
+		t.Fatal("new run ID should not be empty")
+	}
+	// New store should have 4 runs
+	if s2.Count() != 4 {
+		t.Errorf("Count = %d, want 4", s2.Count())
+	}
+}
+
+func TestStore_Persistence_DeletePersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runs.json"
+
+	s1, _ := NewStoreWithPath(path)
+	r1 := s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+	r2 := s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+
+	s1.Delete(r1.RunID)
+
+	s2, _ := LoadFromDisk(path)
+	if s2.Get(r1.RunID) != nil {
+		t.Error("deleted run should not be in reloaded store")
+	}
+	if s2.Get(r2.RunID) == nil {
+		t.Error("non-deleted run should still be in reloaded store")
+	}
+	if s2.Count() != 1 {
+		t.Errorf("Count = %d, want 1", s2.Count())
+	}
+}
+
+func TestStore_Persistence_StateUpdatePersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/runs.json"
+
+	s1, _ := NewStoreWithPath(path)
+	r := s1.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+	s1.UpdateState(r.RunID, StateOrphaned)
+
+	s2, _ := LoadFromDisk(path)
+	got := s2.Get(r.RunID)
+	if got.State != StateOrphaned {
+		t.Errorf("State = %q, want %q", got.State, StateOrphaned)
+	}
+}
+
+func TestStore_Persistence_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/nonexistent.json"
+
+	s, err := NewStoreWithPath(path)
+	if err != nil {
+		t.Fatalf("NewStoreWithPath with nonexistent file: %v", err)
+	}
+	if s.Count() != 0 {
+		t.Errorf("Count = %d, want 0", s.Count())
+	}
+
+	// Creating a run should work and persist
+	s.Create(&Run{NodeID: "n1", Kind: KindTerminal})
+
+	s2, _ := LoadFromDisk(path)
+	if s2.Count() != 1 {
+		t.Errorf("Count after reload = %d, want 1", s2.Count())
 	}
 }

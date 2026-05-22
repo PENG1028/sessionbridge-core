@@ -20,17 +20,20 @@ const (
 
 // State constants.
 const (
-	StateRunning  = "running"
-	StateExited   = "exited"
-	StateStopped  = "stopped"
-	StateFailed   = "failed"
-	StateArchived = "archived"
+	StateRunning    = "running"
+	StateExited     = "exited"
+	StateStopped    = "stopped"
+	StateFailed     = "failed"
+	StateArchived   = "archived"
+	StateOrphaned   = "orphaned"
+	StateRestorable = "restorable"
 )
 
 // Policy on-disconnect / shutdown values supported in this round.
 const (
-	OnDisconnectKeepRunning = "keep_running"
-	OnCoreShutdownTerminate = "terminate"
+	OnDisconnectKeepRunning   = "keep_running"
+	OnCoreShutdownTerminate   = "terminate"
+	OnCoreShutdownKeepRunning = "keep_running"
 )
 
 // Policy describes what happens to the underlying process on certain events.
@@ -73,11 +76,10 @@ func ValidatePolicy(p Policy) string {
 	if p.OnDisconnect != "" && p.OnDisconnect != OnDisconnectKeepRunning {
 		return "unsupported onDisconnect value: " + p.OnDisconnect
 	}
-	if p.OnCoreShutdown != "" && p.OnCoreShutdown != OnCoreShutdownTerminate {
+	if p.OnCoreShutdown != "" && p.OnCoreShutdown != OnCoreShutdownTerminate && p.OnCoreShutdown != OnCoreShutdownKeepRunning {
 		return "unsupported onCoreShutdown value: " + p.OnCoreShutdown
 	}
-	if p.RestartRestore {
-		return "restartRestore is not supported in this round"
-	}
+	// restartRestore is accepted (policy declaration); actual restore mechanism is partial —
+	// Core persists the run record across restarts but does not auto-respawn the process.
 	return ""
 }

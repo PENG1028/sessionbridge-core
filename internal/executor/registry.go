@@ -18,6 +18,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/task"
+	"github.com/user/sessionnode/go-core/internal/update"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
@@ -73,6 +74,12 @@ type Deps struct {
 	// AuditStore is the in-memory store for audit.list.
 	// When nil, audit.list returns empty results.
 	AuditStore *logs.AuditStore
+	// UpdateManager holds update source, policy, and status.
+	// When nil, update.* capabilities degrade gracefully.
+	UpdateManager *update.Manager
+	// GitRunner is used by update.check/update.plan for git operations.
+	// When nil, update.check/plan degrade gracefully.
+	GitRunner update.GitRunner
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -319,4 +326,14 @@ func (r *Registry) registerDefaults() {
 	r.Register("node.invite.list", nodeInviteList)
 	r.Register("node.invite.revoke", nodeInviteRevoke)
 	r.Register("node.invite.accept", nodeInviteAccept)
+
+	// Update — self-update status and planning baseline
+	r.Register("update.status", updateStatus)
+	r.Register("update.source.get", updateSourceGet)
+	r.Register("update.source.set", updateSourceSet)
+	r.Register("update.policy.get", updatePolicyGet)
+	r.Register("update.policy.set", updatePolicySet)
+	r.Register("update.check", updateCheck)
+	r.Register("update.plan", updatePlan)
+	r.Register("update.ignore", updateIgnore)
 }

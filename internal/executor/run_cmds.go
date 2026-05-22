@@ -185,12 +185,24 @@ func runList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		}
 		proc := deps.Processes.Get(r.ProcessID)
 		if proc == nil {
+			// Process gone — classify as orphaned or restorable
+			if r.State == run.StateRunning {
+				if r.Policy.RestartRestore {
+					deps.RunStore.UpdateState(r.RunID, run.StateRestorable)
+				} else {
+					deps.RunStore.UpdateState(r.RunID, run.StateOrphaned)
+				}
+			}
 			continue
 		}
 		switch proc.State {
 		case "exited":
 			if r.State != run.StateExited && r.State != run.StateStopped && r.State != run.StateFailed {
-				deps.RunStore.UpdateState(r.RunID, run.StateExited)
+				ns := run.StateExited
+				if r.Policy.RestartRestore {
+					ns = run.StateRestorable
+				}
+				deps.RunStore.UpdateState(r.RunID, ns)
 			}
 		case "running":
 			// Keep as-is
@@ -251,10 +263,32 @@ func runInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 			}
 			// Sync run state
 			if proc.State == "exited" && r.State == run.StateRunning {
-				deps.RunStore.UpdateState(r.RunID, run.StateExited)
-				result["state"] = run.StateExited
+				ns := run.StateExited
+				if r.Policy.RestartRestore {
+					ns = run.StateRestorable
+				}
+				deps.RunStore.UpdateState(r.RunID, ns)
+				result["state"] = ns
+			}
+		} else {
+			// Process gone — classify
+			if r.State == run.StateRunning {
+				ns := run.StateOrphaned
+				if r.Policy.RestartRestore {
+					ns = run.StateRestorable
+				}
+				deps.RunStore.UpdateState(r.RunID, ns)
+				result["state"] = ns
 			}
 		}
+	} else if r.State == run.StateRunning && deps.Processes != nil {
+		// No process ref but state is running — orphaned
+		ns := run.StateOrphaned
+		if r.Policy.RestartRestore {
+			ns = run.StateRestorable
+		}
+		deps.RunStore.UpdateState(r.RunID, ns)
+		result["state"] = ns
 	}
 
 	return result, nil
@@ -287,6 +321,16 @@ func runStop(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	r := deps.RunStore.GetRef(p.RunID)
 	if r == nil {
 		return nil, fmt.Errorf("run not found: %s", p.RunID)
+	}
+
+	if r.State == run.StateOrphaned || r.State == run.StateRestorable {
+		// No live process; transition directly to stopped.
+		deps.RunStore.UpdateState(p.RunID, run.StateStopped)
+		return map[string]interface{}{
+			"runId":     p.RunID,
+			"state":     run.StateStopped,
+			"sessionId": string(r.SessionID),
+		}, nil
 	}
 
 	if r.State != run.StateRunning {
@@ -397,15 +441,38 @@ func runAttach(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 			}
 			// Sync run state if process has exited
 			if proc.State == "exited" && r.State == run.StateRunning {
-				deps.RunStore.UpdateState(r.RunID, run.StateExited)
-				result["state"] = run.StateExited
+				ns := run.StateExited
+				if r.Policy.RestartRestore {
+					ns = run.StateRestorable
+				}
+				deps.RunStore.UpdateState(r.RunID, ns)
+				result["state"] = ns
+			}
+		} else {
+			// Process gone — classify
+			if r.State == run.StateRunning {
+				ns := run.StateOrphaned
+				if r.Policy.RestartRestore {
+					ns = run.StateRestorable
+				}
+				deps.RunStore.UpdateState(r.RunID, ns)
+				result["state"] = ns
 			}
 		}
+	} else if r.State == run.StateRunning && deps.Processes != nil {
+		// No process ref but state is running — classify
+		ns := run.StateOrphaned
+		if r.Policy.RestartRestore {
+			ns = run.StateRestorable
+		}
+		deps.RunStore.UpdateState(r.RunID, ns)
+		result["state"] = ns
 	}
 
 	// Build stream subscription info
 	// Option A: run.attach returns metadata only; caller uses stream.subscribe separately.
-	isRunning := result["state"] == run.StateRunning
+	runState := result["state"]
+	isRunning := runState == run.StateRunning
 	subs := make([]map[string]interface{}, len(p.StreamTypes))
 	for i, st := range p.StreamTypes {
 		if isRunning {
@@ -415,10 +482,23 @@ func runAttach(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 				"reason":     "call stream.subscribe after attach",
 			}
 		} else {
+			reason := fmt.Sprintf("run is %s", runState)
+			switch runState {
+			case run.StateOrphaned:
+				reason = "run is orphaned — process no longer exists; re-create run to resume"
+			case run.StateRestorable:
+				reason = "run is restorable — policy allows restore; re-create run to resume"
+			case run.StateExited:
+				reason = "run has exited"
+			case run.StateStopped:
+				reason = "run has been stopped"
+			case run.StateFailed:
+				reason = "run has failed"
+			}
 			subs[i] = map[string]interface{}{
 				"streamType": st,
 				"subscribed": false,
-				"reason":     fmt.Sprintf("run is %s", result["state"]),
+				"reason":     reason,
 			}
 		}
 	}

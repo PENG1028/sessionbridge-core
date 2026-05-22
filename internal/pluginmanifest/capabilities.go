@@ -144,6 +144,16 @@ var KnownCapabilities = map[string]bool{
 	"run.updatePolicy": true,
 	"run.attach":       true,
 
+	// Update — self-update status and planning baseline
+	"update.status":     true,
+	"update.source.get": true,
+	"update.source.set": true,
+	"update.policy.get": true,
+	"update.policy.set": true,
+	"update.check":      true,
+	"update.plan":       true,
+	"update.ignore":     true,
+
 	// Network
 	"network.connect": true,
 	"network.listen":  true,

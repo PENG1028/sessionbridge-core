@@ -10,10 +10,12 @@ import (
 )
 
 // Store is an in-memory, thread-safe index of Run entries.
+// When savePath is set, all mutations are automatically persisted to disk.
 type Store struct {
-	mu      sync.RWMutex
-	runs    map[string]*Run
-	counter atomic.Int64
+	mu       sync.RWMutex
+	runs     map[string]*Run
+	counter  atomic.Int64
+	savePath string
 }
 
 // NewStore creates an empty Run store.
@@ -46,6 +48,7 @@ func (s *Store) Create(run *Run) *Run {
 	}
 
 	s.runs[run.RunID] = run
+	s.persistLocked()
 	return run
 }
 
@@ -111,6 +114,7 @@ func (s *Store) UpdateState(runID, state string) {
 	if r, ok := s.runs[runID]; ok {
 		r.State = state
 		r.UpdatedAt = time.Now().UnixMilli()
+		s.persistLocked()
 	}
 }
 
@@ -127,6 +131,7 @@ func (s *Store) UpdatePolicy(runID string, p Policy) error {
 	}
 	r.Policy = p
 	r.UpdatedAt = time.Now().UnixMilli()
+	s.persistLocked()
 	return nil
 }
 
@@ -139,6 +144,7 @@ func (s *Store) SaveProcessRef(runID string, sid types.SessionID, state string) 
 		r.SessionID = sid
 		r.State = state
 		r.UpdatedAt = time.Now().UnixMilli()
+		s.persistLocked()
 	}
 }
 
@@ -149,6 +155,7 @@ func (s *Store) Delete(runID string) bool {
 	_, ok := s.runs[runID]
 	if ok {
 		delete(s.runs, runID)
+		s.persistLocked()
 	}
 	return ok
 }
@@ -158,4 +165,13 @@ func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.runs)
+}
+
+// persistLocked writes the full run index to disk atomically.
+// Caller must hold s.mu (write or read lock).
+func (s *Store) persistLocked() {
+	if s.savePath == "" {
+		return
+	}
+	s.persist()
 }

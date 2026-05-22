@@ -22,6 +22,7 @@ import (
 	"github.com/user/sessionnode/go-core/internal/session"
 	"github.com/user/sessionnode/go-core/internal/task"
 	"github.com/user/sessionnode/go-core/internal/testutil"
+	"github.com/user/sessionnode/go-core/internal/update"
 	"github.com/user/sessionnode/go-core/internal/wsconn"
 	"github.com/user/sessionnode/go-core/pkg/protocol"
 	"github.com/user/sessionnode/go-core/pkg/types"
@@ -2790,20 +2791,17 @@ func TestRunCreate_EmptyCommand(t *testing.T) {
 	}
 }
 
-func TestRunCreate_InvalidPolicy(t *testing.T) {
+func TestRunCreate_AcceptsRestartRestore(t *testing.T) {
 	r := New(testDeps(t))
-	_, err := r.Execute(req("run.create", map[string]interface{}{
+	m := execOK(t, r, "run.create", map[string]interface{}{
 		"command": "go",
 		"args":    []string{"version"},
 		"policy": map[string]interface{}{
 			"restartRestore": true,
 		},
-	}))
-	if err == nil {
-		t.Fatal("expected error for invalid policy")
-	}
-	if !strings.Contains(err.Error(), "invalid policy") {
-		t.Errorf("error = %v, want 'invalid policy'", err)
+	})
+	if m["runId"] == nil || m["runId"] == "" {
+		t.Error("missing runId")
 	}
 }
 
@@ -2966,7 +2964,7 @@ func TestRunUpdatePolicy(t *testing.T) {
 	}
 }
 
-func TestRunUpdatePolicy_RejectsRestartRestore(t *testing.T) {
+func TestRunUpdatePolicy_AcceptsRestartRestore(t *testing.T) {
 	r := New(testDeps(t))
 	m := execOK(t, r, "run.create", map[string]interface{}{
 		"command": "go",
@@ -2974,14 +2972,19 @@ func TestRunUpdatePolicy_RejectsRestartRestore(t *testing.T) {
 	})
 	runID := m["runId"].(string)
 
-	_, err := r.Execute(req("run.updatePolicy", map[string]interface{}{
+	result, err := r.Execute(req("run.updatePolicy", map[string]interface{}{
 		"runId": runID,
 		"policy": map[string]interface{}{
 			"restartRestore": true,
 		},
 	}))
-	if err == nil {
-		t.Fatal("expected error for restartRestore=true")
+	if err != nil {
+		t.Fatalf("expected restartRestore=true to be accepted, got: %v", err)
+	}
+	rm := result.(map[string]interface{})
+	pol := rm["policy"].(run.Policy)
+	if !pol.RestartRestore {
+		t.Error("RestartRestore should be true")
 	}
 }
 
@@ -3784,5 +3787,705 @@ func TestRunAttach_MissingRunId(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "runId is required") {
 		t.Errorf("error should mention 'runId is required', got: %v", err)
+	}
+}
+
+
+func TestRunInfo_ClassifiesOrphanedRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	// Create a run record with a fake ProcessID (no real process)
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "orphaned-test",
+		PluginID:  "terminal",
+		State:     run.StateRunning,
+		SessionID: "sess_fake_orphan",
+		ProcessID: "sess_fake_orphan",
+		Policy:    run.DefaultPolicy(),
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.info", map[string]string{"runId": rn.RunID})
+	state, _ := result["state"].(string)
+	if state != run.StateOrphaned {
+		t.Errorf("state = %q, want %q", state, run.StateOrphaned)
+	}
+}
+
+func TestRunInfo_ClassifiesRestorableRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	pol := run.DefaultPolicy()
+	pol.RestartRestore = true
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "restorable-test",
+		PluginID:  "terminal",
+		State:     run.StateRunning,
+		SessionID: "sess_fake_restore",
+		ProcessID: "sess_fake_restore",
+		Policy:    pol,
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.info", map[string]string{"runId": rn.RunID})
+	state, _ := result["state"].(string)
+	if state != run.StateRestorable {
+		t.Errorf("state = %q, want %q", state, run.StateRestorable)
+	}
+}
+
+func TestRunList_ClassifiesOrphaned(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	// Create running + orphaned mix
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "orphaned-in-list",
+		PluginID:  "terminal",
+		State:     run.StateRunning,
+		SessionID: "sess_fake_orphan2",
+		ProcessID: "sess_fake_orphan2",
+		Policy:    run.DefaultPolicy(),
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.list", map[string]string{})
+	runs, _ := result["runs"].([]interface{})
+	found := false
+	for _, ri := range runs {
+		rm := ri.(map[string]interface{})
+		if rm["runId"] == rn.RunID {
+			found = true
+			if rm["state"] != run.StateOrphaned {
+				t.Errorf("state = %q, want %q", rm["state"], run.StateOrphaned)
+			}
+		}
+	}
+	if !found {
+		t.Error("orphaned run missing from run.list")
+	}
+}
+
+func TestRunStop_OrphanedRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "stop-orphan-test",
+		PluginID:  "terminal",
+		State:     run.StateOrphaned,
+		SessionID: "sess_fake_stop",
+		ProcessID: "sess_fake_stop",
+		Policy:    run.DefaultPolicy(),
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.stop", map[string]string{"runId": rn.RunID, "signal": "SIGTERM"})
+	state, _ := result["state"].(string)
+	if state != run.StateStopped {
+		t.Errorf("state = %q, want %q", state, run.StateStopped)
+	}
+}
+
+func TestRunStop_RestorableRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	pol := run.DefaultPolicy()
+	pol.RestartRestore = true
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "stop-restore-test",
+		PluginID:  "terminal",
+		State:     run.StateRestorable,
+		SessionID: "sess_fake_stop2",
+		ProcessID: "sess_fake_stop2",
+		Policy:    pol,
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.stop", map[string]string{"runId": rn.RunID, "signal": "SIGTERM"})
+	state, _ := result["state"].(string)
+	if state != run.StateStopped {
+		t.Errorf("state = %q, want %q", state, run.StateStopped)
+	}
+}
+
+func TestRunAttach_OrphanedRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "attach-orphan-test",
+		PluginID:  "terminal",
+		State:     run.StateOrphaned,
+		SessionID: "sess_fake_attach_orphan",
+		ProcessID: "sess_fake_attach_orphan",
+		Policy:    run.DefaultPolicy(),
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{"runId": rn.RunID, "replay": false})
+	if result["state"] != run.StateOrphaned {
+		t.Errorf("state = %q, want %q", result["state"], run.StateOrphaned)
+	}
+	if result["sessionId"] != string(rn.SessionID) {
+		t.Errorf("sessionId = %q, want %q", result["sessionId"], string(rn.SessionID))
+	}
+	subs, _ := result["streamSubscriptions"].([]interface{})
+	if len(subs) == 0 {
+		t.Error("expected stream subscription info")
+	}
+}
+
+func TestRunAttach_RestorableRun(t *testing.T) {
+	deps := testDeps(t)
+	r := New(deps)
+
+	pol := run.DefaultPolicy()
+	pol.RestartRestore = true
+	rn := &run.Run{
+		NodeID:    "n1",
+		Kind:      run.KindTerminal,
+		Label:     "attach-restore-test",
+		PluginID:  "terminal",
+		State:     run.StateRestorable,
+		SessionID: "sess_fake_attach_restore",
+		ProcessID: "sess_fake_attach_restore",
+		Policy:    pol,
+	}
+	deps.RunStore.Create(rn)
+
+	result := execOK(t, r, "run.attach", map[string]interface{}{"runId": rn.RunID, "replay": false})
+	if result["state"] != run.StateRestorable {
+		t.Errorf("state = %q, want %q", result["state"], run.StateRestorable)
+	}
+	if result["sessionId"] != string(rn.SessionID) {
+		t.Errorf("sessionId = %q, want %q", result["sessionId"], string(rn.SessionID))
+	}
+	subs, _ := result["streamSubscriptions"].([]interface{})
+	if len(subs) == 0 {
+		t.Error("expected stream subscription info")
+	}
+}
+
+func TestRunCreate_AcceptsOnCoreShutdownKeepRunning(t *testing.T) {
+	r := New(testDeps(t))
+	result := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+		"policy": map[string]interface{}{
+			"onCoreShutdown": "keep_running",
+		},
+	})
+	if result["runId"] == nil || result["runId"] == "" {
+		t.Error("expected valid runId")
+	}
+}
+
+func TestRunUpdatePolicy_AcceptsOnCoreShutdownKeepRunning(t *testing.T) {
+	r := New(testDeps(t))
+	m := execOK(t, r, "run.create", map[string]interface{}{
+		"command": "go",
+		"args":    []string{"version"},
+	})
+	runID := m["runId"].(string)
+
+	result := execOK(t, r, "run.updatePolicy", map[string]interface{}{
+		"runId": runID,
+		"policy": map[string]interface{}{
+			"onCoreShutdown": "keep_running",
+		},
+	})
+	pol, _ := result["policy"].(map[string]interface{})
+	if pol == nil {
+		t.Fatal("policy is missing")
+	}
+	if pol["onCoreShutdown"] != run.OnCoreShutdownKeepRunning {
+		t.Errorf("onCoreShutdown = %q, want %q", pol["onCoreShutdown"], run.OnCoreShutdownKeepRunning)
+	}
+}
+
+// ── update.* tests ──────────────────────────────────────────────────────
+
+// fakeExecGitRunner records calls for assertions in tests.
+type fakeExecGitRunner struct {
+	headCommit string
+	remoteHead string
+	dirty      bool
+
+	headCommitErr error
+	remoteHeadErr error
+	dirtyErr      error
+
+	headCommitCalls int
+	remoteHeadCalls int
+	dirtyCalls      int
+}
+
+func (f *fakeExecGitRunner) HeadCommit() (string, error) {
+	f.headCommitCalls++
+	if f.headCommitErr != nil {
+		return "", f.headCommitErr
+	}
+	return f.headCommit, nil
+}
+
+func (f *fakeExecGitRunner) RemoteHead(remote, branch string) (string, error) {
+	f.remoteHeadCalls++
+	if f.remoteHeadErr != nil {
+		return "", f.remoteHeadErr
+	}
+	return f.remoteHead, nil
+}
+
+func (f *fakeExecGitRunner) IsDirty() (bool, error) {
+	f.dirtyCalls++
+	if f.dirtyErr != nil {
+		return false, f.dirtyErr
+	}
+	return f.dirty, nil
+}
+
+// testUpdateDeps creates Deps with an UpdateManager backed by a temp dir
+// and a fake GitRunner.
+func testUpdateDeps(t *testing.T) (*Deps, *fakeExecGitRunner, *update.Manager) {
+	t.Helper()
+	base := testDeps(t)
+
+	dir := t.TempDir()
+	um, err := update.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	um.SetSource(update.UpdateSource{
+		Type:    "git",
+		Remote:  "origin",
+		Branch:  "main",
+		RepoURL: "https://example.com/repo.git",
+		Mode:    "manual",
+	})
+
+	fake := &fakeExecGitRunner{
+		headCommit: "abc123",
+		remoteHead: "abc123",
+		dirty:      false,
+	}
+
+	base.UpdateManager = um
+	base.GitRunner = fake
+	return base, fake, um
+}
+
+func TestUpdateCheck_UpToDate(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	result := execOK(t, r, "update.check", nil)
+
+	if result["status"] != "up-to-date" {
+		t.Errorf("status = %q, want %q", result["status"], "up-to-date")
+	}
+	if fake.remoteHeadCalls != 1 {
+		t.Errorf("remoteHeadCalls = %d, want 1", fake.remoteHeadCalls)
+	}
+	if fake.headCommitCalls != 1 {
+		t.Errorf("headCommitCalls = %d, want 1", fake.headCommitCalls)
+	}
+}
+
+func TestUpdateCheck_RemoteHeadCalled_NotFetch(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	execOK(t, r, "update.check", nil)
+
+	// RemoteHead is called (ls-remote), not a non-existent Fetch.
+	if fake.remoteHeadCalls != 1 {
+		t.Errorf("remoteHeadCalls = %d, want 1", fake.remoteHeadCalls)
+	}
+}
+
+func TestUpdateCheck_UpdateAvailable(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	result := execOK(t, r, "update.check", nil)
+
+	if result["status"] != "update-available" {
+		t.Errorf("status = %q, want %q", result["status"], "update-available")
+	}
+	if result["requiresRestart"] != true {
+		t.Error("requiresRestart should be true when update available")
+	}
+	if result["behindBy"].(float64) != 1 {
+		t.Errorf("behindBy = %v, want 1", result["behindBy"])
+	}
+}
+
+func TestUpdateCheck_IgnoredRemoteHead(t *testing.T) {
+	deps, fake, um := testUpdateDeps(t)
+	fake.remoteHead = "ignored123"
+	um.SetPolicy(update.UpdatePolicy{
+		AutoCheck:            false,
+		AutoApply:            false,
+		CheckIntervalSeconds: 86400,
+		AllowDirtyWorktree:   false,
+		AllowWhenRunsActive:  false,
+		IgnoredVersions:      []string{"ignored123"},
+	})
+	r := New(deps)
+
+	result := execOK(t, r, "update.check", nil)
+
+	if result["status"] != "up-to-date" {
+		t.Errorf("status = %q, want %q (ignored remote head)", result["status"], "up-to-date")
+	}
+}
+
+func TestUpdateCheck_DirtyWorktree(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.dirty = true
+	r := New(deps)
+
+	result := execOK(t, r, "update.check", nil)
+
+	if result["dirty"] != true {
+		t.Error("dirty should be true")
+	}
+	// Dirty doesn't block check — it returns up-to-date/update-available + dirty flag
+	if result["status"] != "up-to-date" {
+		t.Errorf("status = %q, want %q", result["status"], "up-to-date")
+	}
+}
+
+func TestUpdateCheck_LsRemoteEmpty_ReturnsError(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = ""
+	fake.remoteHeadErr = fmt.Errorf("ls-remote origin refs/heads/main: remote branch may not exist or remote is unreachable")
+	r := New(deps)
+
+	_, err := r.Execute(req("update.check", nil))
+	if err == nil {
+		t.Fatal("expected error for empty ls-remote")
+	}
+	if !strings.Contains(err.Error(), "ls-remote") {
+		t.Errorf("error should mention ls-remote, got: %v", err)
+	}
+}
+
+func TestUpdatePlan_DoesNotFetch(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789" // make it have an update available
+	r := New(deps)
+
+	// Pre-check to set status
+	execOK(t, r, "update.check", nil)
+
+	result := execOK(t, r, "update.plan", nil)
+
+	// plan should NOT have called any additional git operations on the fake
+	// (it reads last status, doesn't re-check unless status is unknown)
+	_ = result
+	// remoteHeadCalls was 1 from update.check, should still be 1 after plan
+	if fake.remoteHeadCalls != 1 {
+		t.Errorf("remoteHeadCalls = %d after plan, want 1 (plan should not re-check)", fake.remoteHeadCalls)
+	}
+}
+
+func TestUpdatePlan_DirtyWorktreeBlocker(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.dirty = true
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	// Pre-check to set status (dirty + update available)
+	execOK(t, r, "update.check", nil)
+
+	result := execOK(t, r, "update.plan", nil)
+
+	if result["canUpdate"] != false {
+		t.Error("canUpdate should be false when worktree is dirty")
+	}
+	blockers, _ := result["blockers"].([]interface{})
+	hasDirty := false
+	for _, b := range blockers {
+		bm, _ := b.(map[string]interface{})
+		if bm["type"] == "dirty_worktree" {
+			hasDirty = true
+		}
+	}
+	if !hasDirty {
+		t.Error("expected dirty_worktree blocker")
+	}
+}
+
+func TestUpdatePlan_ActiveRunsBlocker(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	// Create a running run
+	deps.RunStore.Create(&run.Run{
+		NodeID:   "n1",
+		Kind:     run.KindTerminal,
+		PluginID: "test",
+	})
+
+	// Pre-check
+	execOK(t, r, "update.check", nil)
+
+	result := execOK(t, r, "update.plan", nil)
+
+	if result["canUpdate"] != false {
+		t.Error("canUpdate should be false when active runs exist")
+	}
+	blockers, _ := result["blockers"].([]interface{})
+	hasActiveRuns := false
+	for _, b := range blockers {
+		bm, _ := b.(map[string]interface{})
+		if bm["type"] == "active_runs" {
+			hasActiveRuns = true
+		}
+	}
+	if !hasActiveRuns {
+		t.Error("expected active_runs blocker")
+	}
+}
+
+func TestUpdatePlan_CanUpdate(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	// Pre-check
+	execOK(t, r, "update.check", nil)
+
+	result := execOK(t, r, "update.plan", nil)
+
+	if result["canUpdate"] != true {
+		t.Errorf("canUpdate = %v, want true", result["canUpdate"])
+	}
+	steps, _ := result["steps"].([]interface{})
+	if len(steps) != 2 {
+		t.Errorf("expected 2 plan steps, got %d", len(steps))
+	}
+}
+
+func TestUpdatePlan_StepsDoNotIncludeFetch(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	execOK(t, r, "update.check", nil)
+	result := execOK(t, r, "update.plan", nil)
+
+	steps, _ := result["steps"].([]interface{})
+	for _, s := range steps {
+		sm, _ := s.(map[string]interface{})
+		action, _ := sm["action"].(string)
+		if action == "git_fetch" {
+			t.Error("plan steps must NOT include git_fetch")
+		}
+	}
+}
+
+func TestUpdateCheck_GitRunnerNil_ReturnsError(t *testing.T) {
+	deps := testDeps(t)
+	dir := t.TempDir()
+	um, err := update.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	deps.UpdateManager = um
+	// GitRunner is intentionally not set (nil)
+	r := New(deps)
+
+	_, err = r.Execute(req("update.check", nil))
+	if err == nil {
+		t.Fatal("expected error when GitRunner is nil")
+	}
+}
+
+func TestUpdatePlan_UnknownStatus_TriggersCheck(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	r := New(deps)
+
+	// Don't pre-check — status is unknown. Plan should auto-check.
+	result := execOK(t, r, "update.plan", nil)
+
+	if fake.remoteHeadCalls != 1 {
+		t.Errorf("remoteHeadCalls = %d, want 1 (plan should trigger check when status unknown)", fake.remoteHeadCalls)
+	}
+	_ = result
+}
+
+func TestUpdateSourceGet(t *testing.T) {
+	deps, _, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	result := execOK(t, r, "update.source.get", nil)
+
+	if result["type"] != "git" {
+		t.Errorf("type = %q, want %q", result["type"], "git")
+	}
+	if result["remote"] != "origin" {
+		t.Errorf("remote = %q, want %q", result["remote"], "origin")
+	}
+}
+
+func TestUpdateSourceSet(t *testing.T) {
+	deps, _, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	result := execOK(t, r, "update.source.set", map[string]interface{}{
+		"branch": "develop",
+	})
+
+	if result["branch"] != "develop" {
+		t.Errorf("branch = %q, want %q", result["branch"], "develop")
+	}
+	// Verify it was persisted
+	src := execOK(t, r, "update.source.get", nil)
+	if src["branch"] != "develop" {
+		t.Errorf("persisted branch = %q, want %q", src["branch"], "develop")
+	}
+}
+
+func TestUpdatePolicyGetSet_RoundTrip(t *testing.T) {
+	deps, _, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	// Set
+	execOK(t, r, "update.policy.set", map[string]interface{}{
+		"autoCheck":            true,
+		"checkIntervalSeconds": float64(3600),
+	})
+
+	// Get
+	result := execOK(t, r, "update.policy.get", nil)
+	if result["autoCheck"] != true {
+		t.Error("autoCheck should be true")
+	}
+	if result["checkIntervalSeconds"].(float64) != 3600 {
+		t.Errorf("checkIntervalSeconds = %v", result["checkIntervalSeconds"])
+	}
+	if result["autoApply"] != false {
+		t.Error("autoApply should be false")
+	}
+}
+
+func TestUpdatePolicySet_RejectsAutoApply(t *testing.T) {
+	deps, _, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	_, err := r.Execute(req("update.policy.set", map[string]interface{}{
+		"autoApply": true,
+	}))
+	if err == nil {
+		t.Fatal("expected error when setting autoApply: true")
+	}
+}
+
+func TestUpdateIgnore(t *testing.T) {
+	deps, fake, _ := testUpdateDeps(t)
+	fake.remoteHead = "skipme"
+	r := New(deps)
+
+	// First check — should be update-available
+	result := execOK(t, r, "update.check", nil)
+	if result["status"] != "update-available" {
+		t.Fatalf("pre-check status = %q, want %q", result["status"], "update-available")
+	}
+
+	// Ignore the remote commit
+	ignoreResult := execOK(t, r, "update.ignore", map[string]interface{}{
+		"version": "skipme",
+	})
+	versions, _ := ignoreResult["ignoredVersions"].([]interface{})
+	if len(versions) != 1 {
+		t.Fatalf("expected 1 ignored version, got %d", len(versions))
+	}
+
+	// Status should now be up-to-date
+	statusResult := execOK(t, r, "update.status", nil)
+	if statusResult["status"] != "up-to-date" {
+		t.Errorf("status after ignore = %q, want %q", statusResult["status"], "up-to-date")
+	}
+}
+
+func TestUpdatePlan_AllowsDirtyWhenPermitted(t *testing.T) {
+	deps, fake, um := testUpdateDeps(t)
+	fake.dirty = true
+	fake.remoteHead = "def789"
+	um.SetPolicy(update.UpdatePolicy{
+		AutoCheck:            false,
+		AutoApply:            false,
+		CheckIntervalSeconds: 86400,
+		AllowDirtyWorktree:   true,
+		AllowWhenRunsActive:  false,
+	})
+	r := New(deps)
+
+	execOK(t, r, "update.check", nil)
+	result := execOK(t, r, "update.plan", nil)
+
+	if result["canUpdate"] != true {
+		t.Error("canUpdate should be true when dirty worktree is allowed")
+	}
+}
+
+func TestUpdatePlan_AllowsRunsActiveWhenPermitted(t *testing.T) {
+	deps, fake, um := testUpdateDeps(t)
+	fake.remoteHead = "def789"
+	um.SetPolicy(update.UpdatePolicy{
+		AutoCheck:            false,
+		AutoApply:            false,
+		CheckIntervalSeconds: 86400,
+		AllowDirtyWorktree:   false,
+		AllowWhenRunsActive:  true,
+	})
+	r := New(deps)
+
+	deps.RunStore.Create(&run.Run{
+		NodeID:   "n1",
+		Kind:     run.KindTerminal,
+		PluginID: "test",
+	})
+
+	execOK(t, r, "update.check", nil)
+	result := execOK(t, r, "update.plan", nil)
+
+	if result["canUpdate"] != true {
+		t.Error("canUpdate should be true when active runs are allowed")
+	}
+}
+
+func TestUpdateStatus(t *testing.T) {
+	deps, _, _ := testUpdateDeps(t)
+	r := New(deps)
+
+	result := execOK(t, r, "update.status", nil)
+
+	if result["status"] != "unknown" {
+		t.Errorf("initial status = %q, want %q", result["status"], "unknown")
+	}
+	if result["requiresRestart"] != false {
+		t.Error("requiresRestart should default to false")
 	}
 }
