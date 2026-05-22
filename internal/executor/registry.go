@@ -1,11 +1,14 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/user/sessionnode/go-core/internal/capability"
 	"github.com/user/sessionnode/go-core/internal/config"
 	"github.com/user/sessionnode/go-core/internal/history"
+	"github.com/user/sessionnode/go-core/internal/logs"
 	"github.com/user/sessionnode/go-core/internal/mesh"
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/plan"
@@ -64,6 +67,12 @@ type Deps struct {
 	// Mesh bundles cryptographic node identity and the trusted peer store.
 	// When nil, mesh/peer capabilities degrade gracefully.
 	Mesh *mesh.MeshState
+	// LogBuffer is the in-memory ring buffer for logs.tail / logs.query.
+	// When nil, log capabilities return empty results.
+	LogBuffer *logs.Buffer
+	// AuditStore is the in-memory store for audit.list.
+	// When nil, audit.list returns empty results.
+	AuditStore *logs.AuditStore
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.
@@ -91,12 +100,22 @@ func New(deps *Deps) *Registry {
 	return r
 }
 
+// observabilityCapabilities are capabilities that read logs/audit data.
+// Requests for these are not themselves logged to avoid feedback noise.
+var observabilityCapabilities = map[string]bool{
+	"logs.tail":  true,
+	"logs.query": true,
+	"audit.list": true,
+}
+
 // Execute dispatches a capability request to the registered handler.
 func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
 	plat := platform.Current()
 	resolver := capability.Resolver{Platform: plat}
 	cs := resolver.CheckCapability(req.Capability)
 	if !cs.Supported {
+		r.recordLog(req, "error", fmt.Sprintf("capability %q unsupported on %s", req.Capability, plat.OS))
+		r.recordAudit(req, "error", fmt.Sprintf("unsupported on %s", plat.OS))
 		return nil, &types.CoreError{
 			Code:    "CAPABILITY_UNSUPPORTED_ON_PLATFORM",
 			Message: fmt.Sprintf("capability %q is not supported on %s", req.Capability, plat.OS),
@@ -105,9 +124,79 @@ func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
 
 	handler, ok := r.handlers[req.Capability]
 	if !ok {
+		r.recordLog(req, "error", fmt.Sprintf("unknown capability: %q", req.Capability))
+		r.recordAudit(req, "error", "unknown capability")
 		return nil, fmt.Errorf("unknown capability: %q", req.Capability)
 	}
-	return handler(req, r.deps)
+
+	result, err := handler(req, r.deps)
+	if err != nil {
+		r.recordLog(req, "error", err.Error())
+		r.recordAudit(req, "error", err.Error())
+	} else {
+		r.recordLog(req, "info", "ok")
+		r.recordAudit(req, "ok", "")
+	}
+	return result, err
+}
+
+func (r *Registry) recordLog(req *types.CapabilityRequest, level, msg string) {
+	if r.deps.LogBuffer == nil {
+		return
+	}
+	if observabilityCapabilities[req.Capability] {
+		return
+	}
+	r.deps.LogBuffer.Add(logs.Entry{
+		Timestamp: time.Now().UnixMilli(),
+		Level:     level,
+		Source:    "core",
+		PluginID:  string(req.PluginID),
+		SessionID: extractSessionIDFromPayload(req.Payload),
+		Message:   fmt.Sprintf("%s %s", req.Capability, msg),
+	})
+}
+
+func (r *Registry) recordAudit(req *types.CapabilityRequest, outcome, detail string) {
+	if r.deps.AuditStore == nil {
+		return
+	}
+	if observabilityCapabilities[req.Capability] {
+		return
+	}
+	actor := req.Actor.Type + ":" + req.Actor.ID
+	target := string(req.PluginID) + "/" + req.Capability
+	meta := map[string]interface{}{
+		"requestId": string(req.RequestID),
+	}
+	if req.TargetNodeID != "" {
+		meta["targetNodeId"] = string(req.TargetNodeID)
+	}
+	if detail != "" {
+		meta["detail"] = detail
+	}
+	r.deps.AuditStore.Record(logs.AuditRecord{
+		Timestamp: time.Now().UnixMilli(),
+		EventType: "capability.call",
+		Actor:     actor,
+		Target:    target,
+		Outcome:   outcome,
+		Metadata:  meta,
+	})
+}
+
+func extractSessionIDFromPayload(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return ""
+	}
+	if sid, ok := m["sessionId"].(string); ok {
+		return sid
+	}
+	return ""
 }
 
 // Register adds a handler for the given capability.

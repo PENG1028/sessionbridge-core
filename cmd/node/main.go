@@ -77,7 +77,11 @@ func main() {
 	}
 	defer auditLogger.Close()
 
-	audit := &dispatchAuditBridge{inner: auditLogger}
+	// In-memory observability stores for live query via logs.tail / audit.list.
+	logBuffer := logs.NewBuffer(5000)
+	auditStore := logs.NewAuditStore()
+
+	audit := &dispatchAuditBridge{inner: auditLogger, store: auditStore}
 
 	log.Printf("[startup] starting sessionnode go-core — node=%s listen=%s dataDir=%s", nodeID, addr, logDir)
 
@@ -195,6 +199,8 @@ func main() {
 		Manifests:  manifestReg,
 		RunStore:   runStore,
 		Mesh:       &mesh.MeshState{Identity: nodeIdentity, TrustStore: trustStore, InviteStore: mesh.NewInviteStore()},
+		LogBuffer:  logBuffer,
+		AuditStore: auditStore,
 	}
 	execReg := executor.New(execDeps)
 
@@ -298,9 +304,10 @@ func capMapFromAllPluginsCaps(src map[types.PluginID][]string) map[string][]stri
 }
 
 // dispatchAuditBridge converts dispatcher.AuditLogger calls to structured
-// logs.AuditEntry records.
+// logs.AuditEntry records (file) and logs.AuditRecord (in-memory).
 type dispatchAuditBridge struct {
 	inner *logs.AuditLogger
+	store *logs.AuditStore
 }
 
 func (b *dispatchAuditBridge) Log(req *types.CapabilityRequest, allowed bool, detail string) {
@@ -315,6 +322,26 @@ func (b *dispatchAuditBridge) Log(req *types.CapabilityRequest, allowed bool, de
 		RequestID:  string(req.RequestID),
 	}
 	b.inner.Log(entry)
+
+	// Also record to in-memory store for audit.list queries.
+	outcome := "ok"
+	if !allowed {
+		outcome = "denied"
+	}
+	if b.store != nil {
+		b.store.Record(logs.AuditRecord{
+			Timestamp: entry.Timestamp,
+			EventType: "capability.call",
+			Actor:     entry.ActorType + ":" + entry.ActorID,
+			Target:    entry.PluginID + "/" + entry.Capability,
+			Outcome:   outcome,
+			Metadata: map[string]interface{}{
+				"requestId":  entry.RequestID,
+				"targetNode": entry.TargetNode,
+				"detail":     detail,
+			},
+		})
+	}
 
 	if !allowed {
 		log.Printf("[AUDIT] DENY  %s.%s by %s/%s — %s", req.PluginID, req.Capability, req.Actor.Type, req.Actor.ID, detail)

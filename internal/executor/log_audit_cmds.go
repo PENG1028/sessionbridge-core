@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"github.com/user/sessionnode/go-core/internal/logs"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -26,7 +27,8 @@ func logsTail(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	limit := clampLimit(p.Lines, 100, 1000)
 
 	lines := collectLogLines(deps, p.Source, p.Level, limit)
-	return map[string]interface{}{"lines": lines}, nil
+	entries := collectLogBufferEntries(deps, p.Source, p.Level, limit)
+	return map[string]interface{}{"lines": lines, "entries": entries}, nil
 }
 
 // ─── logs.query ──────────────────────────────────────────────────────────────
@@ -87,52 +89,65 @@ func auditList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 
 // ─── collectors ─────────────────────────────────────────────────────────────
 
-// collectLogLines gathers log lines from the in-memory buffer.
-// Phase 1: returns empty — no persistent log store yet.
 func collectLogLines(deps *Deps, source string, level string, limit int) []logLineEntry {
-	if deps == nil || deps.History == nil {
+	if deps == nil || deps.LogBuffer == nil {
 		return []logLineEntry{}
 	}
-	raw := deps.History.RecentLogLines(source, level, limit)
-	if raw == nil {
-		return []logLineEntry{}
+	entries := deps.LogBuffer.Tail(source, level, limit)
+	out := make([]logLineEntry, len(entries))
+	for i, e := range entries {
+		out[i] = logLineEntry{
+			Timestamp: formatTimestamp(e.Timestamp),
+			Level:     e.Level,
+			Source:    e.Source,
+			Message:   e.Message,
+		}
 	}
-	if lines, ok := raw.([]logLineEntry); ok {
-		return lines
-	}
-	return []logLineEntry{}
+	return out
 }
 
-// collectLogEntries gathers structured log entries for plugin detail views.
-// Phase 1: returns empty — no persistent log store yet.
+func collectLogBufferEntries(deps *Deps, source string, level string, limit int) []logs.Entry {
+	if deps == nil || deps.LogBuffer == nil {
+		return []logs.Entry{}
+	}
+	return deps.LogBuffer.Tail(source, level, limit)
+}
+
 func collectLogEntries(deps *Deps, source string, pluginID string, level string, limit int) []logEntry {
-	if deps == nil || deps.History == nil {
+	if deps == nil || deps.LogBuffer == nil {
 		return []logEntry{}
 	}
-	raw := deps.History.RecentLogEntries(source, pluginID, level, limit)
-	if raw == nil {
-		return []logEntry{}
+	entries := deps.LogBuffer.Query(source, pluginID, level, limit)
+	out := make([]logEntry, len(entries))
+	for i, e := range entries {
+		out[i] = logEntry{
+			Timestamp: e.Timestamp,
+			Level:     e.Level,
+			Source:    e.Source,
+			PluginID:  e.PluginID,
+			Message:   e.Message,
+		}
 	}
-	if entries, ok := raw.([]logEntry); ok {
-		return entries
-	}
-	return []logEntry{}
+	return out
 }
 
-// collectAuditEntries gathers audit trail entries from history or returns empty.
-// Phase 1: minimal — no dedicated audit store; returns empty.
 func collectAuditEntries(deps *Deps, eventType string, actor string, target string, limit int) []auditEntry {
-	if deps == nil || deps.History == nil {
+	if deps == nil || deps.AuditStore == nil {
 		return []auditEntry{}
 	}
-	raw := deps.History.RecentAuditEntries(eventType, actor, target, limit)
-	if raw == nil {
-		return []auditEntry{}
+	records := deps.AuditStore.List(eventType, actor, target, limit)
+	out := make([]auditEntry, len(records))
+	for i, r := range records {
+		out[i] = auditEntry{
+			AuditID:   r.AuditID,
+			Timestamp: r.Timestamp,
+			EventType: r.EventType,
+			Actor:     r.Actor,
+			Target:    r.Target,
+			Metadata:  r.Metadata,
+		}
 	}
-	if entries, ok := raw.([]auditEntry); ok {
-		return entries
-	}
-	return []auditEntry{}
+	return out
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -147,3 +162,6 @@ func clampLimit(n, defaultVal, maxVal int) int {
 	return n
 }
 
+func formatTimestamp(ts int64) string {
+	return fmtTimestamp(ts)
+}
