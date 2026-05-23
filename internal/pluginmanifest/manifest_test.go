@@ -1003,3 +1003,224 @@ core:
 		t.Errorf("expected REQUIRED error for network.connect without description, got: %v", errs)
 	}
 }
+
+// ============================================================================
+// K. View/Panel componentId and entry validation
+// ============================================================================
+
+func TestViewHostRenderedRequiresComponentId(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test
+name: Test
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test.read
+      description: Read
+      capabilities:
+        - fs.read
+      default: ask
+adapters:
+  system-ui:
+    views:
+      - id: test.view
+        surface: main.editor
+        type: host-rendered
+        title: No Component`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for host-rendered view without componentId, got: %v", errs)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "componentId") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error message to mention componentId, got: %v", errs)
+	}
+}
+
+func TestViewCustomReactRequiresEntry(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test
+name: Test
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test.read
+      description: Read
+      capabilities:
+        - fs.read
+      default: ask
+adapters:
+  system-ui:
+    views:
+      - id: test.view
+        surface: main.editor
+        type: custom-react
+        title: No Entry`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for custom-react view without entry, got: %v", errs)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "custom-react view requires entry") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error message about custom-react view entry, got: %v", errs)
+	}
+}
+
+func TestPanelHostRenderedRequiresComponentId(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test
+name: Test
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test.read
+      description: Read
+      capabilities:
+        - fs.read
+      default: ask
+adapters:
+  system-ui:
+    panels:
+      - id: test.panel
+        surface: panel.bottom
+        type: host-rendered
+        title: No Component`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for host-rendered panel without componentId, got: %v", errs)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "componentId") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error message to mention componentId, got: %v", errs)
+	}
+}
+
+func TestPanelCustomReactRequiresEntry(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test
+name: Test
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test.read
+      description: Read
+      capabilities:
+        - fs.read
+      default: ask
+adapters:
+  system-ui:
+    panels:
+      - id: test.panel
+        surface: panel.bottom
+        type: custom-react
+        title: No Entry`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for custom-react panel without entry, got: %v", errs)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "custom-react panel requires entry") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error message about custom-react panel entry, got: %v", errs)
+	}
+}
+
+func TestViewSurfaceRequired(t *testing.T) {
+	yaml := `manifestVersion: "1"
+id: test
+name: Test
+version: 1.0.0
+type: plugin
+trusted: false
+core:
+  permissions:
+    - id: test.read
+      description: Read
+      capabilities:
+        - fs.read
+      default: ask
+adapters:
+  system-ui:
+    views:
+      - id: test.view
+        type: custom-react
+        entry: ./View.tsx
+        title: No Surface`
+	m, _ := ParseYAML([]byte(yaml))
+	errs := Validate(m)
+	if !hasError(errs, "REQUIRED") {
+		t.Errorf("expected REQUIRED error for view without surface, got: %v", errs)
+	}
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Message, "surface") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error message to mention surface, got: %v", errs)
+	}
+}
+
+func TestComponentIdIsParsed(t *testing.T) {
+	m, err := LoadFile("../../../plugins/terminal/plugin.yaml")
+	if err != nil {
+		t.Fatalf("load terminal plugin.yaml: %v", err)
+	}
+	if m.Adapters.SystemUI == nil {
+		t.Fatal("expected system-ui adapter")
+	}
+	if len(m.Adapters.SystemUI.Views) == 0 {
+		t.Fatal("expected at least one view")
+	}
+	v := m.Adapters.SystemUI.Views[0]
+	if v.ComponentID != "TerminalView" {
+		t.Errorf("ComponentID = %q, want TerminalView", v.ComponentID)
+	}
+	if v.Type != "host-rendered" {
+		t.Errorf("Type = %q, want host-rendered", v.Type)
+	}
+	if len(m.Adapters.SystemUI.Panels) == 0 {
+		t.Fatal("expected at least one panel")
+	}
+	p := m.Adapters.SystemUI.Panels[0]
+	if p.ComponentID != "SessionListPanel" {
+		t.Errorf("Panel ComponentID = %q, want SessionListPanel", p.ComponentID)
+	}
+}

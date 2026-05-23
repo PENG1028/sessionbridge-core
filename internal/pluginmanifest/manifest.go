@@ -134,10 +134,11 @@ type SystemUIAdapter struct {
 type UIViewSpec struct {
 	ID      string `yaml:"id" json:"id"`
 	Surface string `yaml:"surface" json:"surface"`
-	Type    string `yaml:"type" json:"type"` // "custom-react" | "host-rendered"
-	Entry   string `yaml:"entry" json:"entry,omitempty"`
-	Title   string `yaml:"title" json:"title,omitempty"`
-	Icon    string `yaml:"icon" json:"icon,omitempty"`
+	Type        string `yaml:"type" json:"type"` // "custom-react" | "host-rendered"
+	Entry       string `yaml:"entry" json:"entry,omitempty"`
+	ComponentID string `yaml:"componentId" json:"componentId,omitempty"`
+	Title       string `yaml:"title" json:"title,omitempty"`
+	Icon        string `yaml:"icon" json:"icon,omitempty"`
 }
 
 // UIPanelSpec declares a panel for system-ui.
@@ -145,8 +146,9 @@ type UIPanelSpec struct {
 	ID      string `yaml:"id" json:"id"`
 	Surface string `yaml:"surface" json:"surface"`
 	Type    string `yaml:"type" json:"type"`
-	Entry   string `yaml:"entry" json:"entry,omitempty"`
-	Title   string `yaml:"title" json:"title,omitempty"`
+	Entry       string `yaml:"entry" json:"entry,omitempty"`
+	ComponentID string `yaml:"componentId" json:"componentId,omitempty"`
+	Title       string `yaml:"title" json:"title,omitempty"`
 }
 
 // SettingsSchema declares configuration JSON schema for system-ui.

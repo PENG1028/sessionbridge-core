@@ -309,6 +309,9 @@ func validateAdapters(m *Manifest, adapters *AdapterSpec) []ValidationError {
 					Message: fmt.Sprintf("view id %q must start with %q", v.ID, m.ID+"."),
 				})
 			}
+			if v.Surface == "" {
+				errs = append(errs, ValidationError{Field: fmt.Sprintf("adapters.system-ui.views[%d].surface", i), Code: "REQUIRED", Message: "view surface is required"})
+			}
 			if v.Entry != "" {
 				errs = append(errs, validateEntryPath(v.Entry, fmt.Sprintf("adapters.system-ui.views[%d].entry", i))...)
 			}
@@ -316,6 +319,18 @@ func validateAdapters(m *Manifest, adapters *AdapterSpec) []ValidationError {
 				errs = append(errs, ValidationError{
 					Field: fmt.Sprintf("adapters.system-ui.views[%d].type", i), Code: "INVALID_TYPE",
 					Message: fmt.Sprintf("invalid view type: %q (must be custom-react or host-rendered)", v.Type),
+				})
+			}
+			if v.Type == "host-rendered" && v.ComponentID == "" {
+				errs = append(errs, ValidationError{
+					Field: fmt.Sprintf("adapters.system-ui.views[%d].componentId", i), Code: "REQUIRED",
+					Message: "host-rendered view requires componentId",
+				})
+			}
+			if v.Type == "custom-react" && v.Entry == "" {
+				errs = append(errs, ValidationError{
+					Field: fmt.Sprintf("adapters.system-ui.views[%d].entry", i), Code: "REQUIRED",
+					Message: "custom-react view requires entry",
 				})
 			}
 		}
@@ -330,8 +345,29 @@ func validateAdapters(m *Manifest, adapters *AdapterSpec) []ValidationError {
 					Message: fmt.Sprintf("panel id %q must start with %q", p.ID, m.ID+"."),
 				})
 			}
+			if p.Surface == "" {
+				errs = append(errs, ValidationError{Field: fmt.Sprintf("adapters.system-ui.panels[%d].surface", i), Code: "REQUIRED", Message: "panel surface is required"})
+			}
 			if p.Entry != "" {
 				errs = append(errs, validateEntryPath(p.Entry, fmt.Sprintf("adapters.system-ui.panels[%d].entry", i))...)
+			}
+			if p.Type != "" && p.Type != "custom-react" && p.Type != "host-rendered" {
+				errs = append(errs, ValidationError{
+					Field: fmt.Sprintf("adapters.system-ui.panels[%d].type", i), Code: "INVALID_TYPE",
+					Message: fmt.Sprintf("invalid panel type: %q (must be custom-react or host-rendered)", p.Type),
+				})
+			}
+			if p.Type == "host-rendered" && p.ComponentID == "" {
+				errs = append(errs, ValidationError{
+					Field: fmt.Sprintf("adapters.system-ui.panels[%d].componentId", i), Code: "REQUIRED",
+					Message: "host-rendered panel requires componentId",
+				})
+			}
+			if p.Type == "custom-react" && p.Entry == "" {
+				errs = append(errs, ValidationError{
+					Field: fmt.Sprintf("adapters.system-ui.panels[%d].entry", i), Code: "REQUIRED",
+					Message: "custom-react panel requires entry",
+				})
 			}
 		}
 
