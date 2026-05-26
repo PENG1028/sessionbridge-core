@@ -312,7 +312,7 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 		TrustExpiresAt: remoteResp.TrustExpiresAt,
 		AutoReconnect:  true,
 		Status:         mesh.TrustStatusOffline,
-		LastSeen:       time.Now().Unix(),
+		LastSeen:       time.Now().UnixMilli(),
 		Policy:         mesh.TrustPolicy{Mode: "full"},
 	}
 

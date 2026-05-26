@@ -179,6 +179,21 @@ func (ts *TrustStore) Remove(nodeID string) error {
 	return ts.writeFile(peers)
 }
 
+// UpdatePeer applies a mutation function to a peer identified by nodeID and
+// persists the change to disk. Returns an error if the peer is not found.
+func (ts *TrustStore) UpdatePeer(nodeID string, fn func(*TrustedPeer)) error {
+	ts.mu.Lock()
+	p, ok := ts.peers[nodeID]
+	if !ok {
+		ts.mu.Unlock()
+		return fmt.Errorf("mesh: peer %q not found in trust store", nodeID)
+	}
+	fn(p)
+	peers := ts.snapshotLocked()
+	ts.mu.Unlock()
+	return ts.writeFile(peers)
+}
+
 // Get returns an independent copy of the trusted peer identified by nodeID,
 // or an error if not found.
 func (ts *TrustStore) Get(nodeID string) (*TrustedPeer, error) {

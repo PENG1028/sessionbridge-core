@@ -137,6 +137,22 @@ func main() {
 			connRegistry.PushSessionEvent(msg.SessionID, msg.EventSeq, msg.Data, msg.Payload)
 		}
 	})
+	// Restore persistent peers from trust store — peers added via invite
+	// pairing that should automatically reconnect after a Core restart.
+	for _, tp := range trustStore.List() {
+		if tp.Status == mesh.TrustStatusRevoked || tp.Status == mesh.TrustStatusExpired {
+			continue
+		}
+		if !tp.AutoReconnect {
+			continue
+		}
+		if len(tp.Addresses) == 0 {
+			continue
+		}
+		if err := topo.AddOrUpdatePeer(types.NodeID(tp.NodeID), tp.Addresses[0], true); err != nil {
+			log.Printf("[startup] restore peer %s: %v", tp.NodeID, err)
+		}
+	}
 	topoCtx, topoCancel := context.WithCancel(context.Background())
 	go topo.Start(topoCtx)
 	defer topoCancel()

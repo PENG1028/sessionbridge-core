@@ -140,8 +140,12 @@ func nodePeerReconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, e
 		return nil, fmt.Errorf("trust store not available")
 	}
 
-	if _, err := deps.Mesh.TrustStore.Get(p.NodeID); err != nil {
+	tp, err := deps.Mesh.TrustStore.Get(p.NodeID)
+	if err != nil {
 		return nil, fmt.Errorf("peer %q not found in trust store", p.NodeID)
+	}
+	if tp.Status == mesh.TrustStatusRevoked || tp.Status == mesh.TrustStatusExpired {
+		return nil, fmt.Errorf("peer %q is %s, cannot reconnect", p.NodeID, tp.Status)
 	}
 
 	// Signal topology to reconnect
@@ -149,6 +153,13 @@ func nodePeerReconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, e
 		if err := deps.Topology.ReconnectPeer(types.NodeID(p.NodeID)); err != nil {
 			log.Printf("[peer] reconnect %s: topology returned %v", p.NodeID, err)
 		}
+	}
+
+	// Persist reconnect: enable auto-reconnect
+	if err := deps.Mesh.TrustStore.UpdatePeer(p.NodeID, func(tp *mesh.TrustedPeer) {
+		tp.AutoReconnect = true
+	}); err != nil {
+		log.Printf("[peer] reconnect %s: update trust store: %v", p.NodeID, err)
 	}
 
 	return map[string]interface{}{
@@ -177,6 +188,14 @@ func nodePeerDisconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, 
 		if err := deps.Topology.DisconnectPeer(types.NodeID(p.NodeID)); err != nil {
 			log.Printf("[peer] disconnect %s: topology returned %v", p.NodeID, err)
 		}
+	}
+
+	// Persist the disconnect: disable auto-reconnect
+	if err := deps.Mesh.TrustStore.UpdatePeer(p.NodeID, func(tp *mesh.TrustedPeer) {
+		tp.AutoReconnect = false
+		tp.Status = mesh.TrustStatusOffline
+	}); err != nil {
+		log.Printf("[peer] disconnect %s: update trust store: %v", p.NodeID, err)
 	}
 
 	return map[string]interface{}{
