@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,9 +220,9 @@ func main() {
 	// Server (with optional TLS)
 	var sv *server.Server
 	if tlsCert != "" && tlsKey != "" {
-		sv = server.NewWithTLS(addr, tlsCert, tlsKey, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore)
+		sv = server.NewWithTLS(addr, tlsCert, tlsKey, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
 	} else {
-		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore)
+		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
 	}
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
@@ -230,6 +231,16 @@ func main() {
 	fmt.Printf("  Config:  %s\n", cfgPath)
 	fmt.Printf("  Logs:    %s\n", filepath.Join(logDir, "logs"))
 	fmt.Printf("  Token:   %s\n", map[bool]string{true: "enabled", false: "disabled (dev mode)"}[token != ""])
+
+	// Warn if listening on a public address without a token.
+	allowInsecure := os.Getenv("SESSIONNODE_ALLOW_INSECURE") == "1"
+	if token == "" && !allowInsecure && isPublicAddr(addr) {
+		log.Printf("[WARN] **************************************************")
+		log.Printf("[WARN] LISTEN_ADDR=%s with empty SESSIONNODE_TOKEN", addr)
+		log.Printf("[WARN] This is INSECURE. Set SESSIONNODE_TOKEN for production use.")
+		log.Printf("[WARN] To suppress this warning, set SESSIONNODE_ALLOW_INSECURE=1")
+		log.Printf("[WARN] **************************************************")
+	}
 
 	if err := sv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
@@ -242,6 +253,24 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// isPublicAddr returns true when the listen address is not localhost/loopback.
+func isPublicAddr(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 // fileExists returns true if the given path exists and is a directory.

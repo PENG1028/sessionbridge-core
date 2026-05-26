@@ -116,7 +116,7 @@ func testServerWithMesh(t *testing.T, serverID string) (*Server, *httptest.Serve
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, identity, trustStore)
+	sv := New("", d, sessStore, cr, pm, identity, trustStore, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv, identity, trustStore
 }

@@ -52,15 +52,20 @@ type Server struct {
 	trustStore *mesh.TrustStore
 	peerConns  map[string]string // connID → peerNodeID
 	peerConnsMu sync.RWMutex
+
+	// Control access token. When non-empty, /ws requires matching ?token= or
+	// Authorization: Bearer header. This is the same SESSIONNODE_TOKEN value
+	// used by the dispatcher's TokenAuthenticator.
+	token string
 }
 
 // New creates a Server. Call Start() to begin listening.
-func New(addr string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore) *Server {
-	return NewWithTLS(addr, "", "", d, s, cr, pm, identity, trustStore)
+func New(addr string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore, token string) *Server {
+	return NewWithTLS(addr, "", "", d, s, cr, pm, identity, trustStore, token)
 }
 
 // NewWithTLS creates a Server with optional TLS. Leave certFile/keyFile empty for plain HTTP.
-func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore) *Server {
+func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *session.Store, cr *wsconn.Registry, pm *process.Manager, identity *mesh.NodeIdentity, trustStore *mesh.TrustStore, token string) *Server {
 	sv := &Server{
 		addr:         addr,
 		tlsCert:      certFile,
@@ -73,6 +78,7 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 		identity:     identity,
 		trustStore:   trustStore,
 		peerConns:    make(map[string]string),
+		token:        token,
 	}
 	sv.registerHandlers()
 	return sv
@@ -226,7 +232,28 @@ func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWS upgrades to WebSocket and manages a single client connection.
+// When s.token is non-empty, the token must be provided via ?token= query param
+// or Authorization: Bearer header before the WebSocket upgrade is accepted.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if s.token != "" {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			// Fallback to Authorization Bearer header.
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				token = strings.TrimPrefix(auth, "Bearer ")
+			}
+		}
+		if token != s.token {
+			log.Printf("[ws] token rejected from %s", r.RemoteAddr)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "missing or invalid token",
+			})
+			return
+		}
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[ws] upgrade error: %v", err)
@@ -615,6 +642,13 @@ func (s *Server) dispatchAction(msg *protocol.Message, connID string) *protocol.
 		if msg.ActorType != "" {
 			actorType = msg.ActorType
 		}
+	}
+
+	// For control WS connections (not peers), the WS upgrade handler already
+	// validated the token against s.token. Auto-populate the actor token so
+	// dispatch-level auth doesn't require each message to carry it redundantly.
+	if !isPeer && s.token != "" && msg.ActorToken == "" {
+		msg.ActorToken = s.token
 	}
 
 	if actorID == "" {

@@ -55,7 +55,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -739,7 +739,7 @@ func testServerWithHistory(t *testing.T) (*Server, *httptest.Server, *history.St
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv, historyStore
 }
@@ -786,7 +786,7 @@ func testServerWithRealPermission(t *testing.T, caps map[types.PluginID][]string
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -889,7 +889,7 @@ func TestWSAccessControl_DenyMode(t *testing.T) {
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	defer httpSrv.Close()
 
@@ -1126,7 +1126,7 @@ func testServerWithToken(t *testing.T, token string) (*Server, *httptest.Server)
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, token)
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv
 }
@@ -1135,66 +1135,129 @@ func TestWSServiceTokenE2E(t *testing.T) {
 	const validToken = "test-service-token-42"
 	_, srv := testServerWithToken(t, validToken)
 	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
 
-	// Test 1: no token → UNAUTHENTICATED
-	conn := wsConnect(t, srv)
+	// Test 1: no token -> WS upgrade fails
+	_, _, err := websocket.DefaultDialer.Dial(base+"/ws", nil)
+	if err == nil {
+		t.Fatal("expected dial error when no token provided")
+	}
+
+	// Test 2: wrong token -> WS upgrade fails
+	_, _, err = websocket.DefaultDialer.Dial(base+"/ws?token=wrong-token", nil)
+	if err == nil {
+		t.Fatal("expected dial error when wrong token provided")
+	}
+
+	// Test 3: valid token -> WS upgrade succeeds
+	conn, _, err := websocket.DefaultDialer.Dial(base+"/ws?token="+validToken, nil)
+	if err != nil {
+		t.Fatalf("WS dial with valid token failed: %v", err)
+	}
+	defer conn.Close()
+
+	// After valid WS upgrade, a normal action request should succeed.
+	// Must include ActorID since token auth requires it.
 	msg := &protocol.Message{
 		Type:       protocol.MsgTypeActionRequest,
-		RequestID:  "req_notoken",
+		RequestID:  "req_after_upgrade",
 		Capability: "system.info",
-		ActorType:  "external",
-		ActorID:    "script",
-		// no ActorToken
+		ActorID:    "test-client",
 	}
-	resp := sendAndRecv(t, conn, msg)
-	if resp.OK {
-		t.Fatal("expected failure when no token is provided")
+	data, _ := msg.MarshalJSON()
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Fatalf("write error: %v", err)
 	}
-	if resp.Error == nil || resp.Error.Code != protocol.ErrCodeUnauthenticated {
-		t.Errorf("expected UNAUTHENTICATED, got code=%v msg=%v",
-			errCode(resp.Error), errMsg(resp.Error))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	resp, err := protocol.UnmarshalMessage(raw)
+	if err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("expected success after valid token upgrade, got: %v", resp.Error)
+	}
+}
+
+// TestWSTokenUpgradeRejected tests that WS upgrade is rejected when token is
+// required but missing or wrong (SERVER-level check, not dispatch-level).
+func TestWSTokenUpgradeRejected(t *testing.T) {
+	const validToken = "upgrade-test-token"
+	_, srv := testServerWithToken(t, validToken)
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	// Test: no token → upgrade fails
+	_, _, err := websocket.DefaultDialer.Dial(base+"/ws", nil)
+	if err == nil {
+		t.Fatal("expected dial error when token required but not provided")
+	}
+	if !strings.Contains(err.Error(), "bad handshake") {
+		t.Errorf("expected bad handshake, got: %v", err)
+	}
+
+	// Test: wrong token → upgrade fails
+	_, _, err = websocket.DefaultDialer.Dial(base+"/ws?token=wrong-token", nil)
+	if err == nil {
+		t.Fatal("expected dial error when wrong token provided")
+	}
+	if !strings.Contains(err.Error(), "bad handshake") {
+		t.Errorf("expected bad handshake, got: %v", err)
+	}
+
+	// Test: correct ?token= → upgrade succeeds
+	conn, _, err := websocket.DefaultDialer.Dial(base+"/ws?token="+validToken, nil)
+	if err != nil {
+		t.Fatalf("WS dial with ?token= failed: %v", err)
 	}
 	conn.Close()
 
-	// Test 2: wrong token → UNAUTHENTICATED
-	conn2 := wsConnect(t, srv)
-	msg2 := &protocol.Message{
-		Type:       protocol.MsgTypeActionRequest,
-		RequestID:  "req_badtoken",
-		Capability: "system.info",
-		ActorType:  "external",
-		ActorID:    "script",
-		ActorToken: "wrong-token",
-	}
-	resp2 := sendAndRecv(t, conn2, msg2)
-	if resp2.OK {
-		t.Fatal("expected failure when wrong token is provided")
-	}
-	if resp2.Error == nil || resp2.Error.Code != protocol.ErrCodeUnauthenticated {
-		t.Errorf("expected UNAUTHENTICATED for wrong token, got code=%v msg=%v",
-			errCode(resp2.Error), errMsg(resp2.Error))
+	// Test: Authorization: Bearer → upgrade succeeds
+	hdr := map[string][]string{"Authorization": {"Bearer " + validToken}}
+	conn2, _, err := websocket.DefaultDialer.Dial(base+"/ws", hdr)
+	if err != nil {
+		t.Fatalf("WS dial with Bearer failed: %v", err)
 	}
 	conn2.Close()
-
-	// Test 3: valid token → OK
-	conn3 := wsConnect(t, srv)
-	msg3 := &protocol.Message{
-		Type:       protocol.MsgTypeActionRequest,
-		RequestID:  "req_oktoken",
-		Capability: "system.info",
-		ActorType:  "external",
-		ActorID:    "script",
-		ActorToken: validToken,
-	}
-	resp3 := sendAndRecv(t, conn3, msg3)
-	if !resp3.OK {
-		t.Fatalf("expected success with valid token, got: %v", resp3.Error)
-	}
-	conn3.Close()
 }
 
-// ---------------------------------------------------------------------------
-// Terminal Reconnect E2E — disconnect / reconnect lifecycle
+// TestWSTokenDevMode verifies that when server token is empty (dev mode),
+// WS upgrade succeeds without any token.
+func TestWSTokenDevMode(t *testing.T) {
+	_, srv := testServer(t)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", nil)
+	if err != nil {
+		t.Fatalf("WS dial (dev mode, no token) should succeed: %v", err)
+	}
+	conn.Close()
+}
+
+// TestWSActorTypeNodeBlockedOnControlWS verifies that client-claimed
+// actorType=node is rejected when a trust store is configured.
+func TestWSActorTypeNodeBlockedOnControlWS(t *testing.T) {
+	// This test needs a trust store for the blocking to work.
+	// If testServerWithMesh is not available, use a simpler approach.
+	_, httpSrv, _, _ := testServerWithMesh(t, "server_actorblock")
+	defer httpSrv.Close()
+
+	conn := wsConnect(t, httpSrv)
+	defer conn.Close()
+
+	resp := sendAndRecv(t, conn, &protocol.Message{
+		Type:       protocol.MsgTypeActionRequest,
+		RequestID:  "req_actor",
+		Capability: "system.info",
+		ActorType:  "node",
+	})
+	if resp.OK {
+		t.Fatal("expected failure when client claims actorType=node on /ws")
+	}
+}
 // ---------------------------------------------------------------------------
 
 // testServerWithRunStore creates a server wired with RunStore, History, and
@@ -1252,7 +1315,7 @@ func testServerWithRunStore(t *testing.T) (*Server, *httptest.Server, *run.Store
 		"node_local",
 	)
 
-	sv := New("", d, sessStore, cr, pm, nil, nil)
+	sv := New("", d, sessStore, cr, pm, nil, nil, "")
 	httpSrv := httptest.NewServer(sv.httpServer.Handler)
 	return sv, httpSrv, runStore, historyStore
 }
