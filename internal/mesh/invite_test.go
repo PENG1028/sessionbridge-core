@@ -279,7 +279,7 @@ func TestNewTrustStorePersistence(t *testing.T) {
 		t.Fatal("trust store should not be nil")
 	}
 
-	pubKey := []byte("somekey")
+	pubKey := []byte("0123456789abcdef0123456789abcdef")
 	peer := &TrustedPeer{
 		NodeID:         "peer-01",
 		Name:           "peer one",
@@ -314,7 +314,7 @@ func TestTrustStoreRemove(t *testing.T) {
 	dir := tempDir(t)
 	ts := NewTrustStore(dir)
 
-	pubKey := []byte("key1")
+	pubKey := []byte("abcdef0123456789abcdef01234567ab")
 	peer := &TrustedPeer{NodeID: "peer-01", PublicKey: pubKey, Status: "trusted", Policy: TrustPolicy{Mode: "full"}}
 	ts.Add(peer)
 
@@ -337,8 +337,8 @@ func TestTrustStoreTrusted(t *testing.T) {
 	dir := tempDir(t)
 	ts := NewTrustStore(dir)
 
-	pubKey1 := []byte("pubkey1")
-	pubKey2 := []byte("pubkey2")
+	pubKey1 := []byte("abcdef0123456789abcdef01234567ab")
+	pubKey2 := []byte("deadbeef0123456789abcdef01234567")
 	ts.Add(&TrustedPeer{NodeID: "p1", PublicKey: pubKey1, Status: "trusted", Policy: TrustPolicy{Mode: "full"}})
 	ts.Add(&TrustedPeer{NodeID: "p2", PublicKey: pubKey2, Status: "pending", Policy: TrustPolicy{Mode: "full"}})
 

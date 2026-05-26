@@ -34,9 +34,12 @@ func peerTestDeps(t *testing.T, nodes []NodeInfo) *Deps {
 // addTestPeer adds a peer to the trust store for testing convenience.
 func addTestPeer(t *testing.T, ts *mesh.TrustStore, nodeID, name, fingerprint string, addresses []string, status string) {
 	t.Helper()
+	pub := make([]byte, 32)
+	copy(pub, nodeID)
 	if err := ts.Add(&mesh.TrustedPeer{
 		NodeID:      nodeID,
 		Name:        name,
+		PublicKey:   pub,
 		Fingerprint: fingerprint,
 		Addresses:   addresses,
 		Status:      status,

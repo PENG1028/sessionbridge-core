@@ -461,3 +461,66 @@ func TestTrustStore_UpdateLastSeen_UnknownNode(t *testing.T) {
 		t.Fatal("expected empty store after UpdateLastSeen on unknown node")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Add validation tests
+// ---------------------------------------------------------------------------
+
+func TestTrustStore_Add_NilPeer(t *testing.T) {
+	ts := NewTrustStore(filepath.Join(t.TempDir(), "peers.json"))
+	err := ts.Add(nil)
+	if err == nil {
+		t.Fatal("expected error for nil peer")
+	}
+}
+
+func TestTrustStore_Add_EmptyNodeID(t *testing.T) {
+	ts := NewTrustStore(filepath.Join(t.TempDir(), "peers.json"))
+	pk := genTestKey(t)
+	err := ts.Add(&TrustedPeer{
+		NodeID:    "",
+		PublicKey: pk,
+		Policy:    TrustPolicy{Mode: "full"},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty NodeID")
+	}
+}
+
+func TestTrustStore_Add_EmptyPublicKey(t *testing.T) {
+	ts := NewTrustStore(filepath.Join(t.TempDir(), "peers.json"))
+	err := ts.Add(&TrustedPeer{
+		NodeID:    "node-1",
+		PublicKey: nil,
+		Policy:    TrustPolicy{Mode: "full"},
+	})
+	if err == nil {
+		t.Fatal("expected error for nil PublicKey")
+	}
+}
+
+func TestTrustStore_Add_ShortPublicKey(t *testing.T) {
+	ts := NewTrustStore(filepath.Join(t.TempDir(), "peers.json"))
+	err := ts.Add(&TrustedPeer{
+		NodeID:    "node-1",
+		PublicKey: []byte("short"),
+		Policy:    TrustPolicy{Mode: "full"},
+	})
+	if err == nil {
+		t.Fatal("expected error for short PublicKey")
+	}
+}
+
+func TestTrustStore_Add_ValidPeer(t *testing.T) {
+	ts := NewTrustStore(filepath.Join(t.TempDir(), "peers.json"))
+	pk := genTestKey(t)
+	err := ts.Add(&TrustedPeer{
+		NodeID:      "node-1",
+		PublicKey:   pk,
+		Fingerprint: "fp",
+		Policy:      TrustPolicy{Mode: "full"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for valid peer: %v", err)
+	}
+}

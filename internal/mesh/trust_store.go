@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -140,9 +141,23 @@ func (ts *TrustStore) snapshotLocked() []*TrustedPeer {
 
 // Add inserts or updates a trusted peer. A deep copy of the peer is stored so
 // the caller cannot mutate the store's internal state through the argument.
+//
+// Validation rules:
+//   - peer must not be nil
+//   - NodeID must not be empty
+//   - PublicKey must be ed25519.PublicKeySize bytes
 func (ts *TrustStore) Add(peer *TrustedPeer) error {
 	if peer == nil {
-		return fmt.Errorf("mesh: trusted peer is nil")
+		return fmt.Errorf("mesh: trusted peer nodeId is required")
+	}
+	if peer.NodeID == "" {
+		return fmt.Errorf("mesh: trusted peer nodeId is required")
+	}
+	if len(peer.PublicKey) == 0 {
+		return fmt.Errorf("mesh: trusted peer publicKey is required")
+	}
+	if len(peer.PublicKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("mesh: trusted peer publicKey has wrong length: got %d, want %d", len(peer.PublicKey), ed25519.PublicKeySize)
 	}
 	cp := peer.deepCopy()
 

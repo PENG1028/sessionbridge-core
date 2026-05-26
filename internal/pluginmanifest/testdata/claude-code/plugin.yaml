@@ -16,7 +16,7 @@ core:
       capabilities:
         - session.create
         - session.list
-        - session.stop
+        - session.destroy
       default: ask
       constraints:
         paths:

@@ -575,6 +575,18 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if s.identity == nil || s.trustStore == nil {
+		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
+		return
+	}
+	if s.identity == nil || s.trustStore == nil {
+		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
+		return
+	}
+	if s.identity == nil || s.trustStore == nil {
+		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
+		return
+	}
 	if s.inviteStore == nil {
 		http.Error(w, `{"error":"invite store not configured"}`, http.StatusInternalServerError)
 		return
@@ -606,9 +618,36 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if req.Fingerprint == "" {
+		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
+		return
+	}
+	
+	if req.Fingerprint == "" {
+		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
+		return
+	}
+	
+	if req.Fingerprint == "" {
+		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
+		return
+	}
+	
 	pubKeyBytes, err := hex.DecodeString(req.PublicKey)
 	if err != nil {
 		http.Error(w, `{"error":"invalid public key encoding"}`, http.StatusBadRequest)
+		return
+	}
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		http.Error(w, `{"error":"invalid public key length"}`, http.StatusBadRequest)
+		return
+	}
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		http.Error(w, `{"error":"invalid public key length"}`, http.StatusBadRequest)
+		return
+	}
+	if len(pubKeyBytes) != ed25519.PublicKeySize {
+		http.Error(w, `{"error":"invalid public key length"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -621,12 +660,16 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 	if peerName == "" {
 		peerName = req.NodeID
 	}
+	addresses := []string{}
+	if req.AddressHint != "" {
+		addresses = append(addresses, req.AddressHint)
+	}
 	peer := &mesh.TrustedPeer{
 		NodeID:         req.NodeID,
 		Name:           peerName,
 		PublicKey:      pubKeyBytes,
 		Fingerprint:    req.Fingerprint,
-		Addresses:      []string{req.AddressHint},
+		Addresses:      addresses,
 		TrustExpiresAt: trustExpiresAt,
 		AutoReconnect:  true,
 		Status:         mesh.TrustStatusOffline,

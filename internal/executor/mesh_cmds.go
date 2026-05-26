@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -243,13 +244,16 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	}
 
 	// Parse the remote peer's response to get their identity.
+	// The response uses a "node" field (not "peer") - see handlePeerInviteAccept in server.go.
 	var remoteResp struct {
 		Status string `json:"status"`
-		Peer   struct {
-			NodeID      string   `json:"nodeId"`
-			Fingerprint string   `json:"fingerprint"`
-			Addresses   []string `json:"addresses"`
-		} `json:"peer"`
+		Node   struct {
+			NodeID      string `json:"nodeId"`
+			PublicKey   string `json:"publicKey"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"node"`
+		TrustExpiresAt int64  `json:"trustExpiresAt"`
+		PeerWSPath     string `json:"peerWsPath"`
 	}
 	if err := json.Unmarshal(respBody, &remoteResp); err != nil {
 		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to decode peer response: %v", err)}
@@ -259,44 +263,63 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 		return nil, &types.CoreError{Code: "PEER_REJECTED", Message: fmt.Sprintf("peer did not accept: %s", remoteResp.Status)}
 	}
 
-	remoteNodeID := remoteResp.Peer.NodeID
-	remoteFingerprint := remoteResp.Peer.Fingerprint
-	remoteAddresses := remoteResp.Peer.Addresses
-	if len(remoteAddresses) == 0 {
-		remoteAddresses = []string{normalizePeerAddress(p.PeerURL)}
+	remoteNodeID := remoteResp.Node.NodeID
+	remotePubKeyHex := remoteResp.Node.PublicKey
+	remoteFingerprint := remoteResp.Node.Fingerprint
+
+	// Validate the response fields.
+	if remoteNodeID == "" {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: "remote peer returned empty nodeId"}
+	}
+	if remotePubKeyHex == "" {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: "remote peer returned empty publicKey"}
+	}
+	if remoteFingerprint == "" {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: "remote peer returned empty fingerprint"}
 	}
 
-	// Determine trust expiration based on the invite's trust duration.
-	var trustExpiresAt int64
+	remotePubKey, err := hex.DecodeString(remotePubKeyHex)
+	if err != nil {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: fmt.Sprintf("remote peer returned invalid publicKey hex: %v", err)}
+	}
+	if len(remotePubKey) != ed25519.PublicKeySize {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: fmt.Sprintf("remote peer publicKey has wrong length: got %d, want %d", len(remotePubKey), ed25519.PublicKeySize)}
+	}
+
+	// Build address list from the peer URL.
+	remoteAddresses := []string{normalizePeerAddress(p.PeerURL)}
+	if remoteResp.PeerWSPath != "" && remoteResp.PeerWSPath != "/peer/ws" {
+		scheme := "ws://"
+		if strings.HasPrefix(p.PeerURL, "wss://") {
+			scheme = "wss://"
+		}
+		baseHost := normalizePeerAddress(p.PeerURL)
+		remoteAddresses = []string{scheme + baseHost + remoteResp.PeerWSPath, baseHost}
+	}
 
 	peerName := p.NameHint
 	if peerName == "" {
 		peerName = remoteNodeID
 	}
 
-	// Store the remote peer in our trust store.
+	// Build the trusted peer with the remote node's public key.
 	peer := &mesh.TrustedPeer{
 		NodeID:         remoteNodeID,
 		Name:           peerName,
+		PublicKey:      remotePubKey,
 		Fingerprint:    remoteFingerprint,
 		Addresses:      remoteAddresses,
-		TrustExpiresAt: trustExpiresAt,
+		TrustExpiresAt: remoteResp.TrustExpiresAt,
 		AutoReconnect:  true,
-		Status:         "pending",
+		Status:         mesh.TrustStatusOffline,
 		LastSeen:       time.Now().Unix(),
 		Policy:         mesh.TrustPolicy{Mode: "full"},
 	}
 
+	// Store the remote peer in our trust store.
+	// TrustStore.Add is insert-or-update, so re-accepting the same peer works.
 	if err := deps.Mesh.TrustStore.Add(peer); err != nil {
-		// If already exists, update instead
-		if existingPeer, getErr := deps.Mesh.TrustStore.Get(remoteNodeID); getErr == nil {
-			existingPeer.Addresses = remoteAddresses
-			existingPeer.Fingerprint = remoteFingerprint
-			existingPeer.Status = "pending"
-			existingPeer.LastSeen = time.Now().Unix()
-		} else {
-			return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to store peer: %v", err)}
-		}
+		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to store peer: %v", err)}
 	}
 
 	// Signal topology to add and connect to the peer.
@@ -309,10 +332,12 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 		}
 	}
 
+	// Include publicKey in the response for verification by UI/test.
 	return map[string]interface{}{
 		"status": "accepted",
 		"peer": map[string]interface{}{
 			"nodeId":         peer.NodeID,
+			"publicKey":      remotePubKeyHex,
 			"fingerprint":    peer.Fingerprint,
 			"addresses":      peer.Addresses,
 			"trustExpiresAt": peer.TrustExpiresAt,
