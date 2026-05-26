@@ -10,14 +10,15 @@ import (
 
 // PluginSummary is a lightweight description of a discovered plugin.
 type PluginSummary struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Type        string `json:"type"`
-	Trusted     bool   `json:"trusted"`
-	Enabled     bool   `json:"enabled"`
-	Description string `json:"description,omitempty"`
-	Error       string `json:"error,omitempty"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	Type        string   `json:"type"`
+	Trusted     bool     `json:"trusted"`
+	Enabled     bool     `json:"enabled"`
+	Description string   `json:"description,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
 // pluginEntry holds the manifest and any validation errors for a discovered plugin.
@@ -166,16 +167,29 @@ func (r *PluginRegistry) ListPlugins() []PluginSummary {
 	out := make([]PluginSummary, 0, len(r.plugins))
 	for id, entry := range r.plugins {
 		s := PluginSummary{
-			ID:          id,
-			Name:        entry.manifest.Name,
-			Version:     entry.manifest.Version,
-			Type:        entry.manifest.Type,
-			Trusted:     entry.manifest.Trusted,
-			Enabled:     r.enabled[id],
-			Description: entry.manifest.Description,
+			ID:           id,
+			Name:         entry.manifest.Name,
+			Version:      entry.manifest.Version,
+			Type:         entry.manifest.Type,
+			Trusted:      entry.manifest.Trusted,
+			Enabled:      r.enabled[id],
+			Description:  entry.manifest.Description,
+			Capabilities: nil,
 		}
 		if len(entry.errs) > 0 {
 			s.Error = entry.errs[0].Message
+		}
+		// Extract capabilities from manifest permissions.
+		if entry.manifest.Core != nil {
+			seen := make(map[string]bool)
+			for _, perm := range entry.manifest.Core.Permissions {
+				for _, capName := range perm.Capabilities {
+					if !seen[capName] {
+						s.Capabilities = append(s.Capabilities, capName)
+						seen[capName] = true
+					}
+				}
+			}
 		}
 		out = append(out, s)
 	}

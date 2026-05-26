@@ -33,7 +33,7 @@ import (
 // Config defines the local identity and list of peers to connect to.
 type Config struct {
 	LocalID   types.NodeID
-	LocalName string         // from node.name, used as base for display naming
+	LocalName string             // from node.name, used as base for display naming
 	Identity  *mesh.NodeIdentity // local node identity for peer handshake
 	Peers     []PeerConfig
 }
@@ -41,8 +41,8 @@ type Config struct {
 // PeerConfig describes a remote peer to connect to.
 type PeerConfig struct {
 	ID      types.NodeID `json:"id"`
-	Address string       `json:"address"`          // "host:port" or full "ws://host:port/path"
-	Tags    []string     `json:"tags,omitempty"`   // e.g. ["local"]
+	Address string       `json:"address"`        // "host:port" or full "ws://host:port/path"
+	Tags    []string     `json:"tags,omitempty"` // e.g. ["local"]
 }
 
 // --- Status constants ---
@@ -105,6 +105,9 @@ type PeerTopology struct {
 
 	streamChunkHandler StreamChunkHandler
 
+	cancelFuncs map[types.NodeID]context.CancelFunc
+	cancelMu    sync.Mutex
+
 	mu  sync.RWMutex
 	log *log.Logger
 }
@@ -113,12 +116,13 @@ type PeerTopology struct {
 // with the "local" tag. Configured peers are registered in disconnected state.
 func New(cfg Config) *PeerTopology {
 	pt := &PeerTopology{
-		localID:   cfg.LocalID,
-		localName: cfg.LocalName,
-		identity:  cfg.Identity,
-		peers:     make(map[types.NodeID]*Peer),
-		pending:   make(map[types.RequestID]chan *types.CapabilityResponse),
-		log:       log.New(log.Writer(), "[topology] ", log.LstdFlags),
+		localID:     cfg.LocalID,
+		localName:   cfg.LocalName,
+		identity:    cfg.Identity,
+		peers:       make(map[types.NodeID]*Peer),
+		pending:     make(map[types.RequestID]chan *types.CapabilityResponse),
+		cancelFuncs: make(map[types.NodeID]context.CancelFunc),
+		log:         log.New(log.Writer(), "[topology] ", log.LstdFlags),
 	}
 
 	// Register local node
@@ -159,6 +163,12 @@ func (pt *PeerTopology) Start(ctx context.Context) {
 
 // Shutdown closes all peer connections immediately.
 func (pt *PeerTopology) Shutdown() {
+	pt.cancelMu.Lock()
+	for _, cancel := range pt.cancelFuncs {
+		cancel()
+	}
+	pt.cancelMu.Unlock()
+
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	for _, peer := range pt.peers {
@@ -638,4 +648,113 @@ func hasTag(tags []string, tag string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic peer lifecycle management
+// ---------------------------------------------------------------------------
+
+// connectPeerLoop starts or restarts a connectLoop for a peer.
+// If a loop is already running, it cancels the existing one first.
+func (pt *PeerTopology) connectPeerLoop(nodeID types.NodeID) {
+	pt.cancelMu.Lock()
+	if cancel, ok := pt.cancelFuncs[nodeID]; ok {
+		cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	pt.cancelFuncs[nodeID] = cancel
+	pt.cancelMu.Unlock()
+
+	pt.mu.RLock()
+	peer, ok := pt.peers[nodeID]
+	pt.mu.RUnlock()
+	if !ok || nodeID == pt.localID {
+		return
+	}
+
+	go func() {
+		pt.connectLoop(ctx, peer)
+		pt.cancelMu.Lock()
+		delete(pt.cancelFuncs, nodeID)
+		pt.cancelMu.Unlock()
+	}()
+}
+
+// AddOrUpdatePeer registers a new peer or updates an existing peer's address
+// and auto-reconnect preference. If the peer already exists and has a connect
+// loop running, it is restarted with the new address.
+func (pt *PeerTopology) AddOrUpdatePeer(id types.NodeID, address string, autoReconnect bool) error {
+	if id == pt.localID {
+		return fmt.Errorf("cannot add local node as peer")
+	}
+	pt.mu.Lock()
+	if existing, ok := pt.peers[id]; ok {
+		existing.Address = address
+		existing.Tags = nil
+	} else {
+		pt.peers[id] = newPeer(id, address, nil, StatusDisconnected)
+	}
+	pt.mu.Unlock()
+
+	if autoReconnect {
+		pt.connectPeerLoop(id)
+	}
+	return nil
+}
+
+// ConnectPeer starts a connection loop for a known peer.
+func (pt *PeerTopology) ConnectPeer(nodeID types.NodeID) error {
+	pt.mu.RLock()
+	_, ok := pt.peers[nodeID]
+	pt.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("node %s not found in topology", nodeID)
+	}
+	if nodeID == pt.localID {
+		return fmt.Errorf("cannot connect to local node")
+	}
+
+	pt.connectPeerLoop(nodeID)
+	return nil
+}
+
+// DisconnectPeer cancels the connection loop and closes the connection.
+func (pt *PeerTopology) DisconnectPeer(nodeID types.NodeID) error {
+	pt.cancelMu.Lock()
+	if cancel, ok := pt.cancelFuncs[nodeID]; ok {
+		cancel()
+		delete(pt.cancelFuncs, nodeID)
+	}
+	pt.cancelMu.Unlock()
+
+	pt.mu.RLock()
+	peer, ok := pt.peers[nodeID]
+	pt.mu.RUnlock()
+	if ok {
+		peer.mu.Lock()
+		if peer.conn != nil {
+			peer.conn.Close()
+			peer.conn = nil
+		}
+		peer.status = StatusDisconnected
+		peer.mu.Unlock()
+	}
+	return nil
+}
+
+// RemovePeer removes a peer from topology after disconnecting.
+func (pt *PeerTopology) RemovePeer(nodeID types.NodeID) error {
+	_ = pt.DisconnectPeer(nodeID)
+
+	pt.mu.Lock()
+	delete(pt.peers, nodeID)
+	pt.mu.Unlock()
+	return nil
+}
+
+// ReconnectPeer disconnects and reconnects a peer.
+func (pt *PeerTopology) ReconnectPeer(nodeID types.NodeID) error {
+	_ = pt.DisconnectPeer(nodeID)
+	return pt.ConnectPeer(nodeID)
 }

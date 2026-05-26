@@ -41,6 +41,15 @@ type NodeLister interface {
 	ListNodes() []NodeInfo
 }
 
+// TopologyManager provides dynamic peer lifecycle management to the executor.
+type TopologyManager interface {
+	AddOrUpdatePeer(id types.NodeID, address string, autoReconnect bool) error
+	ConnectPeer(nodeID types.NodeID) error
+	DisconnectPeer(nodeID types.NodeID) error
+	RemovePeer(nodeID types.NodeID) error
+	ReconnectPeer(nodeID types.NodeID) error
+}
+
 // Deps holds shared dependencies that executors can use.
 type Deps struct {
 	Sessions   *session.Store
@@ -80,6 +89,9 @@ type Deps struct {
 	// GitRunner is used by update.check/update.plan for git operations.
 	// When nil, update.check/plan degrade gracefully.
 	GitRunner update.GitRunner
+	// Topology provides dynamic peer lifecycle management (connect, disconnect, etc.).
+	// When nil, peer management capabilities degrade gracefully.
+	Topology TopologyManager
 }
 
 // ManifestLoader provides plugin manifest data to capability handlers.

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -57,6 +58,9 @@ type Server struct {
 	// Authorization: Bearer header. This is the same SESSIONNODE_TOKEN value
 	// used by the dispatcher's TokenAuthenticator.
 	token string
+
+	// Invite store for remote pairing via /peer/invite/accept.
+	inviteStore *mesh.InviteStore
 }
 
 // New creates a Server. Call Start() to begin listening.
@@ -79,9 +83,15 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 		trustStore:   trustStore,
 		peerConns:    make(map[string]string),
 		token:        token,
+		inviteStore:  nil,
 	}
 	sv.registerHandlers()
 	return sv
+}
+
+// SetInviteStore sets the invite store for remote pairing.
+func (s *Server) SetInviteStore(is *mesh.InviteStore) {
+	s.inviteStore = is
 }
 
 func (s *Server) registerHandlers() {
@@ -92,6 +102,7 @@ func (s *Server) registerHandlers() {
 	mux.HandleFunc("/api/processes", s.handleProcesses)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/peer/ws", s.handlePeerWS)
+	mux.HandleFunc("/peer/invite/accept", s.handlePeerInviteAccept)
 	s.httpServer = &http.Server{Addr: s.addr, Handler: mux}
 }
 
@@ -508,7 +519,7 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	s.peerConnsMu.Unlock()
 
 	// Update last seen in trust store.
-	trustedPeer.LastSeen = time.Now().UnixMilli()
+	s.trustStore.UpdateLastSeen(peerNodeID)
 
 	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
 	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
@@ -554,6 +565,96 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	writeWg.Wait()
 	conn.Close()
 	log.Printf("[peer-ws] peer %s disconnected", peerNodeID)
+}
+
+
+// handlePeerInviteAccept handles HTTP POST requests for remote peer pairing.
+func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"POST required"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.inviteStore == nil {
+		http.Error(w, `{"error":"invite store not configured"}`, http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Code        string `json:"code"`
+		NodeID      string `json:"nodeId"`
+		PublicKey   string `json:"publicKey"`
+		Fingerprint string `json:"fingerprint"`
+		NameHint    string `json:"nameHint,omitempty"`
+		AddressHint string `json:"addressHint,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Code == "" || req.NodeID == "" || req.PublicKey == "" {
+		http.Error(w, `{"error":"code, nodeId, and publicKey are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	invite, err := s.inviteStore.Consume(req.Code)
+	if err != nil {
+		log.Printf("[peer-invite] invalid code from %s: %v", r.RemoteAddr, err)
+		http.Error(w, `{"error":"invalid or expired invite code"}`, http.StatusForbidden)
+		return
+	}
+
+	pubKeyBytes, err := hex.DecodeString(req.PublicKey)
+	if err != nil {
+		http.Error(w, `{"error":"invalid public key encoding"}`, http.StatusBadRequest)
+		return
+	}
+
+	var trustExpiresAt int64
+	if invite.TrustDurationSeconds > 0 {
+		trustExpiresAt = time.Now().UnixMilli() + (invite.TrustDurationSeconds * 1000)
+	}
+
+	peerName := req.NameHint
+	if peerName == "" {
+		peerName = req.NodeID
+	}
+	peer := &mesh.TrustedPeer{
+		NodeID:         req.NodeID,
+		Name:           peerName,
+		PublicKey:      pubKeyBytes,
+		Fingerprint:    req.Fingerprint,
+		Addresses:      []string{req.AddressHint},
+		TrustExpiresAt: trustExpiresAt,
+		AutoReconnect:  true,
+		Status:         mesh.TrustStatusOffline,
+		LastSeen:       time.Now().UnixMilli(),
+		Policy:         mesh.TrustPolicy{Mode: "full"},
+	}
+
+	if err := s.trustStore.Add(peer); err != nil {
+		log.Printf("[peer-invite] failed to store peer: %v", err)
+		http.Error(w, `{"error":"failed to store peer"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("[peer-invite] accepted pairing from %s (%s)", req.NodeID, req.Fingerprint)
+
+	resp := map[string]interface{}{
+		"status": "accepted",
+		"node": map[string]interface{}{
+			"nodeId":      s.identity.NodeID,
+			"publicKey":   hex.EncodeToString(s.identity.PublicKey),
+			"fingerprint": s.identity.Fingerprint,
+		},
+		"trustExpiresAt": trustExpiresAt,
+		"peerWsPath":     "/peer/ws",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // readPeerMessage reads a single message from the peer with a timeout.

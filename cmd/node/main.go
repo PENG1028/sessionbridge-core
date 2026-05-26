@@ -196,6 +196,7 @@ func main() {
 		Notifier:   notifyMgr,
 		Config:     cfgMgr,
 		Nodes:      topo,
+		Topology:   topo,
 		History:    historyStore,
 		Manifests:  manifestReg,
 		RunStore:   runStore,
@@ -221,8 +222,10 @@ func main() {
 	var sv *server.Server
 	if tlsCert != "" && tlsKey != "" {
 		sv = server.NewWithTLS(addr, tlsCert, tlsKey, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
+		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	} else {
 		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
+		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	}
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
@@ -232,15 +235,8 @@ func main() {
 	fmt.Printf("  Logs:    %s\n", filepath.Join(logDir, "logs"))
 	fmt.Printf("  Token:   %s\n", map[bool]string{true: "enabled", false: "disabled (dev mode)"}[token != ""])
 
-	// Warn if listening on a public address without a token.
-	allowInsecure := os.Getenv("SESSIONNODE_ALLOW_INSECURE") == "1"
-	if token == "" && !allowInsecure && isPublicAddr(addr) {
-		log.Printf("[WARN] **************************************************")
-		log.Printf("[WARN] LISTEN_ADDR=%s with empty SESSIONNODE_TOKEN", addr)
-		log.Printf("[WARN] This is INSECURE. Set SESSIONNODE_TOKEN for production use.")
-		log.Printf("[WARN] To suppress this warning, set SESSIONNODE_ALLOW_INSECURE=1")
-		log.Printf("[WARN] **************************************************")
-	}
+	// Fail or warn if listening on a public address without a token.
+	validatePublicAccess(addr, token)
 
 	if err := sv.Start(); err != nil {
 		log.Fatalf("server error: %v", err)
@@ -271,6 +267,22 @@ func isPublicAddr(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// validatePublicAccess fails fast when listening on a public address without a token.
+// Set SESSIONNODE_ALLOW_INSECURE=1 to run without a token on a public address.
+func validatePublicAccess(addr, token string) {
+	if token != "" {
+		return
+	}
+	allowInsecure := os.Getenv("SESSIONNODE_ALLOW_INSECURE") == "1"
+	if allowInsecure {
+		log.Printf("[startup] public access allowed: LISTEN_ADDR=%s, SESSIONNODE_ALLOW_INSECURE=1", addr)
+		return
+	}
+	if isPublicAddr(addr) {
+		log.Fatalf("FATAL: LISTEN_ADDR=%s with empty SESSIONNODE_TOKEN is not allowed. Set SESSIONNODE_TOKEN or SESSIONNODE_ALLOW_INSECURE=1", addr)
+	}
 }
 
 // fileExists returns true if the given path exists and is a directory.

@@ -169,3 +169,34 @@ func (is *InviteStore) Validate(code string) (*Invite, error) {
 
 	return nil, fmt.Errorf("mesh: invite not found or invalid")
 }
+
+// Consume validates a code and removes the invite (one-time use).
+// Returns the matching invite (without the raw code) if valid.
+// Expired and revoked invites are rejected.
+// Unlike Validate, Consume deletes the invite so it cannot be reused.
+func (is *InviteStore) Consume(code string) (*Invite, error) {
+	if len(code) != 32 {
+		return nil, fmt.Errorf("mesh: invalid code length")
+	}
+
+	codeHash := hashCode(code)
+
+	is.mu.Lock()
+	defer is.mu.Unlock()
+
+	now := time.Now().Unix()
+
+	for id, inv := range is.invites {
+		if inv.CodeHash == codeHash {
+			if inv.ExpiresAt <= now {
+				return nil, fmt.Errorf("mesh: invite expired")
+			}
+			delete(is.invites, id) // one-time use, remove immediately
+			cp := *inv
+			cp.Code = ""
+			return &cp, nil
+		}
+	}
+
+	return nil, fmt.Errorf("mesh: invite not found or invalid")
+}

@@ -3,6 +3,7 @@ package permission
 import (
 	"testing"
 
+	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -68,5 +69,20 @@ func TestAllPluginsCaps_ClaudeCode(t *testing.T) {
 	}
 	if !hasNetworkDNS {
 		t.Error("claude-code should have network.dns")
+	}
+}
+
+func TestTerminalPluginCapabilitiesInKnownList(t *testing.T) {
+	terminalCaps := []string{
+		"session.create", "session.list", "session.get", "session.destroy",
+		"stream.write", "stream.subscribe", "stream.replay", "stream.tail",
+		"node.list",
+		"process.spawn", "process.signal", "process.resize",
+		"run.create", "run.list", "run.info", "run.stop", "run.attach", "run.updatePolicy",
+	}
+	for _, cap := range terminalCaps {
+		if !pluginmanifest.KnownCapabilities[cap] {
+			t.Errorf("terminal capability %q not in KnownCapabilities", cap)
+		}
 	}
 }

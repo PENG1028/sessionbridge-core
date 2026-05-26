@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"log"
 	"net"
 
 	"github.com/user/sessionnode/go-core/internal/mesh"
@@ -143,6 +144,13 @@ func nodePeerReconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, e
 		return nil, fmt.Errorf("peer %q not found in trust store", p.NodeID)
 	}
 
+	// Signal topology to reconnect
+	if deps.Topology != nil {
+		if err := deps.Topology.ReconnectPeer(types.NodeID(p.NodeID)); err != nil {
+			log.Printf("[peer] reconnect %s: topology returned %v", p.NodeID, err)
+		}
+	}
+
 	return map[string]interface{}{
 		"status": "reconnecting",
 		"nodeId": p.NodeID,
@@ -150,7 +158,6 @@ func nodePeerReconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, e
 }
 
 // nodePeerDisconnect disconnects a peer connection but keeps the trust record.
-// Full disconnect implementation requires topology to expose a DisconnectPeer method.
 func nodePeerDisconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	var p peerInfoPayload
 	if err := decodePayload(req.Payload, &p); err != nil {
@@ -165,9 +172,12 @@ func nodePeerDisconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, 
 		return nil, fmt.Errorf("peer %q not found in trust store", p.NodeID)
 	}
 
-	// Full disconnect implementation requires topology to expose DisconnectPeer method.
-	// For now, verify the peer exists in the trust store and return disconnected status.
-	// The trust record is intentionally preserved.
+	// Signal topology to disconnect
+	if deps.Topology != nil {
+		if err := deps.Topology.DisconnectPeer(types.NodeID(p.NodeID)); err != nil {
+			log.Printf("[peer] disconnect %s: topology returned %v", p.NodeID, err)
+		}
+	}
 
 	return map[string]interface{}{
 		"status": "disconnected",
@@ -175,8 +185,7 @@ func nodePeerDisconnect(req *types.CapabilityRequest, deps *Deps) (interface{}, 
 	}, nil
 }
 
-// nodePeerRevoke removes a peer from the trust store.
-// If the peer has an active connection, it should also be disconnected.
+// nodePeerRevoke removes a peer from the trust store and topology.
 func nodePeerRevoke(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	var p peerInfoPayload
 	if err := decodePayload(req.Payload, &p); err != nil {
@@ -185,6 +194,13 @@ func nodePeerRevoke(req *types.CapabilityRequest, deps *Deps) (interface{}, erro
 
 	if deps.Mesh == nil || deps.Mesh.TrustStore == nil {
 		return nil, fmt.Errorf("trust store not available")
+	}
+
+	// Remove from topology first (best-effort)
+	if deps.Topology != nil {
+		if err := deps.Topology.RemovePeer(types.NodeID(p.NodeID)); err != nil {
+			log.Printf("[peer] revoke %s: topology remove returned %v", p.NodeID, err)
+		}
 	}
 
 	if err := deps.Mesh.TrustStore.Remove(p.NodeID); err != nil {
@@ -226,9 +242,9 @@ func nodeReachabilityCheck(req *types.CapabilityRequest, deps *Deps) (interface{
 	}
 
 	return map[string]interface{}{
-		"publicReachable":   "unknown",
+		"publicReachable":    "unknown",
 		"inboundPeerAllowed": inboundPeerAllowed,
-		"outboundOnly":      !inboundPeerAllowed,
-		"reason":            reason,
+		"outboundOnly":       !inboundPeerAllowed,
+		"reason":             reason,
 	}, nil
 }

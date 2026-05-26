@@ -1,8 +1,14 @@
 package executor
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/user/sessionnode/go-core/internal/mesh"
@@ -25,9 +31,9 @@ type nodeInviteRevokePayload struct {
 }
 
 type nodeInviteAcceptPayload struct {
-	PeerURL   string `json:"peerUrl"`
-	Code      string `json:"code"`
-	NameHint  string `json:"nameHint,omitempty"`
+	PeerURL  string `json:"peerUrl"`
+	Code     string `json:"code"`
+	NameHint string `json:"nameHint,omitempty"`
 }
 
 type nodeInviteListPayload struct{}
@@ -137,11 +143,51 @@ func nodeInviteRevoke(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	}, nil
 }
 
-// nodeInviteAccept validates an invite code and stores the peer in the trust store.
-// Phase 1: validates locally, adds peer with "pending" trust status.
-// Phase 2 (Agent C): actual WS connection will be established by topology.
+// peerURLToInviteAcceptURL converts a WebSocket URL to an HTTP invite-accept URL.
+// ws://host:port/path -> http://host:port/peer/invite/accept
+// wss://host:port/path -> https://host:port/peer/invite/accept
+func peerURLToInviteAcceptURL(peerURL string) string {
+	rest := strings.TrimPrefix(peerURL, "ws://")
+	if rest != peerURL {
+		return "http://" + strings.Split(rest, "/")[0] + "/peer/invite/accept"
+	}
+	rest = strings.TrimPrefix(peerURL, "wss://")
+	if rest != peerURL {
+		return "https://" + strings.Split(rest, "/")[0] + "/peer/invite/accept"
+	}
+	// Plain host:port -- assume ws
+	return "http://" + peerURL + "/peer/invite/accept"
+}
+
+// normalizePeerAddress extracts a clean host:port from a WebSocket URL for trust store storage.
+func normalizePeerAddress(peerURL string) string {
+	rest := strings.TrimPrefix(peerURL, "ws://")
+	if rest != peerURL {
+		return strings.Split(rest, "/")[0]
+	}
+	rest = strings.TrimPrefix(peerURL, "wss://")
+	if rest != peerURL {
+		return strings.Split(rest, "/")[0]
+	}
+	return peerURL
+}
+
+// nodeInviteAccept validates an invite code via the remote peer's HTTP endpoint
+// and stores the remote peer in the local trust store.
+//
+// Flow:
+//  1. Caller sends node.invite.accept with {peerUrl, code, nameHint}
+//  2. This function makes an HTTP POST to peerUrl/peer/invite/accept
+//     with the caller's identity (nodeId, publicKey, fingerprint)
+//  3. Remote peer validates the invite code (one-time use via Consume),
+//     stores the caller in its trust store, returns remote identity
+//  4. This function stores the remote peer in the local trust store
+//  5. Topology is signaled to connect to the new peer
 func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
-	if deps.Mesh == nil || deps.Mesh.InviteStore == nil {
+	if deps.Mesh == nil || deps.Mesh.Identity == nil {
+		return nil, &types.CoreError{Code: "NOT_FOUND", Message: "node identity not available"}
+	}
+	if deps.Mesh.InviteStore == nil {
 		return nil, &types.CoreError{Code: "NOT_FOUND", Message: "invite store not available"}
 	}
 	if deps.Mesh.TrustStore == nil {
@@ -155,42 +201,112 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	if p.Code == "" {
 		return nil, &types.CoreError{Code: "MISSING_FIELD", Message: "code is required"}
 	}
-
-	// Phase 1: Validate the invite code locally
-	invite, err := deps.Mesh.InviteStore.Validate(p.Code)
-	if err != nil {
-		return nil, &types.CoreError{Code: "INVALID_INVITE", Message: fmt.Sprintf("invite validation failed: %v", err)}
+	if p.PeerURL == "" {
+		return nil, &types.CoreError{Code: "MISSING_FIELD", Message: "peerUrl is required"}
 	}
+
+	// Build the HTTP invite-accept URL from the peer's WebSocket URL.
+	inviteURL := peerURLToInviteAcceptURL(p.PeerURL)
+
+	// Prepare the request body with our identity.
+	body := map[string]interface{}{
+		"code":        p.Code,
+		"nodeId":      string(deps.Mesh.Identity.NodeID),
+		"publicKey":   hex.EncodeToString(deps.Mesh.Identity.PublicKey),
+		"fingerprint": deps.Mesh.Identity.Fingerprint,
+		"address":     normalizePeerAddress(p.PeerURL),
+	}
+	if p.NameHint != "" {
+		body["nameHint"] = p.NameHint
+	}
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to marshal request: %v", err)}
+	}
+
+	// Send HTTP POST to the remote peer's invite-accept endpoint.
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Post(inviteURL, "application/json", bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, &types.CoreError{Code: "CONNECTION_FAILED", Message: fmt.Sprintf("failed to contact peer at %s: %v", inviteURL, err)}
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to read peer response: %v", err)}
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &types.CoreError{Code: "PEER_REJECTED", Message: fmt.Sprintf("peer rejected invite (HTTP %d): %s", resp.StatusCode, string(respBody))}
+	}
+
+	// Parse the remote peer's response to get their identity.
+	var remoteResp struct {
+		Status string `json:"status"`
+		Peer   struct {
+			NodeID      string   `json:"nodeId"`
+			Fingerprint string   `json:"fingerprint"`
+			Addresses   []string `json:"addresses"`
+		} `json:"peer"`
+	}
+	if err := json.Unmarshal(respBody, &remoteResp); err != nil {
+		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to decode peer response: %v", err)}
+	}
+
+	if remoteResp.Status != "accepted" {
+		return nil, &types.CoreError{Code: "PEER_REJECTED", Message: fmt.Sprintf("peer did not accept: %s", remoteResp.Status)}
+	}
+
+	remoteNodeID := remoteResp.Peer.NodeID
+	remoteFingerprint := remoteResp.Peer.Fingerprint
+	remoteAddresses := remoteResp.Peer.Addresses
+	if len(remoteAddresses) == 0 {
+		remoteAddresses = []string{normalizePeerAddress(p.PeerURL)}
+	}
+
+	// Determine trust expiration based on the invite's trust duration.
+	var trustExpiresAt int64
 
 	peerName := p.NameHint
 	if peerName == "" {
-		peerName = invite.LocalNodeID
+		peerName = remoteNodeID
 	}
 
-	// Determine trust expiration
-	var trustExpiresAt int64
-	if invite.TrustDurationSeconds > 0 {
-		trustExpiresAt = time.Now().Unix() + invite.TrustDurationSeconds
-	}
-	// 0 = permanent
-
-	// Phase 2: Store the peer in the trust store with "pending" trust
-	// The actual WS connection will be established by topology (Agent C)
+	// Store the remote peer in our trust store.
 	peer := &mesh.TrustedPeer{
-		NodeID:         invite.LocalNodeID,
+		NodeID:         remoteNodeID,
 		Name:           peerName,
-		PublicKey:      invite.LocalPublicKey,
-		Fingerprint:    invite.LocalFingerprint,
-		Addresses:      []string{p.PeerURL},
+		Fingerprint:    remoteFingerprint,
+		Addresses:      remoteAddresses,
 		TrustExpiresAt: trustExpiresAt,
-		AutoReconnect:  false,
+		AutoReconnect:  true,
 		Status:         "pending",
 		LastSeen:       time.Now().Unix(),
 		Policy:         mesh.TrustPolicy{Mode: "full"},
 	}
 
 	if err := deps.Mesh.TrustStore.Add(peer); err != nil {
-		return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to store peer: %v", err)}
+		// If already exists, update instead
+		if existingPeer, getErr := deps.Mesh.TrustStore.Get(remoteNodeID); getErr == nil {
+			existingPeer.Addresses = remoteAddresses
+			existingPeer.Fingerprint = remoteFingerprint
+			existingPeer.Status = "pending"
+			existingPeer.LastSeen = time.Now().Unix()
+		} else {
+			return nil, &types.CoreError{Code: "INTERNAL", Message: fmt.Sprintf("failed to store peer: %v", err)}
+		}
+	}
+
+	// Signal topology to add and connect to the peer.
+	if deps.Topology != nil {
+		if err := deps.Topology.AddOrUpdatePeer(types.NodeID(remoteNodeID), remoteAddresses[0], true); err != nil {
+			log.Printf("[mesh] invite accept: AddOrUpdatePeer %s: %v", remoteNodeID, err)
+		}
+		if err := deps.Topology.ConnectPeer(types.NodeID(remoteNodeID)); err != nil {
+			log.Printf("[mesh] invite accept: ConnectPeer %s: %v", remoteNodeID, err)
+		}
 	}
 
 	return map[string]interface{}{

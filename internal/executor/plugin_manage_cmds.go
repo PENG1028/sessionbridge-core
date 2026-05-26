@@ -33,6 +33,7 @@ func pluginList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 				"status":      status,
 				"type":        "feature",
 				"description": s.Description,
+				"capabilities": s.Capabilities,
 			}
 			if s.Error != "" {
 				entry["error"] = s.Error

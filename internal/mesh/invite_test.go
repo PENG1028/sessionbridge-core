@@ -369,6 +369,79 @@ func TestTrustStoreTrusted(t *testing.T) {
 	}
 }
 
+func TestConsumeInvite(t *testing.T) {
+	store := NewInviteStore()
+	identity := newTestIdentity(t)
+
+	invite, err := store.Create(identity, 60, 0)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// First consume should succeed
+	consumed, err := store.Consume(invite.Code)
+	if err != nil {
+		t.Fatalf("Consume failed for valid code: %v", err)
+	}
+	if consumed.InviteID != invite.InviteID {
+		t.Fatalf("expected inviteId %q, got %q", invite.InviteID, consumed.InviteID)
+	}
+	if consumed.Code != "" {
+		t.Fatal("consumed invite must not contain the code")
+	}
+
+	// Second consume with the same code should fail (one-time use)
+	_, err = store.Consume(invite.Code)
+	if err == nil {
+		t.Fatal("expected error for already-consumed invite")
+	}
+}
+
+func TestConsumeInvite_WrongCode(t *testing.T) {
+	store := NewInviteStore()
+	identity := newTestIdentity(t)
+
+	_, err := store.Create(identity, 60, 0)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Wrong code should fail
+	_, err = store.Consume("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err == nil {
+		t.Fatal("expected error for wrong code")
+	}
+
+	// Short code should fail
+	_, err = store.Consume("short")
+	if err == nil {
+		t.Fatal("expected error for short code")
+	}
+}
+
+func TestConsumeInvite_Expired(t *testing.T) {
+	store := NewInviteStore()
+	identity := newTestIdentity(t)
+
+	invite, err := store.Create(identity, 10, 0)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Manually expire the invite
+	store.mu.Lock()
+	for _, inv := range store.invites {
+		inv.ExpiresAt = time.Now().Unix() - 1
+	}
+	store.mu.Unlock()
+
+	// Consume should fail for expired invite
+	_, err = store.Consume(invite.Code)
+	if err == nil {
+		t.Fatal("expected error for expired invite")
+	}
+}
+
 func tempDir(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "trusted_peers.json")
 }

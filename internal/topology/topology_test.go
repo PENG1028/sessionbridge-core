@@ -491,3 +491,139 @@ func TestHandleMessage_StreamChunk_NoPendingSideEffect(t *testing.T) {
 		t.Fatal("timeout waiting for action.response after stream.chunk")
 	}
 }
+
+func TestAddOrUpdatePeer_NewPeer(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+	})
+
+	err := pt.AddOrUpdatePeer("node-remote", "10.0.0.1:8080", false)
+	if err != nil {
+		t.Fatalf("AddOrUpdatePeer failed: %v", err)
+	}
+
+	nodes := pt.ListNodes()
+	found := false
+	for _, n := range nodes {
+		if n.ID == "node-remote" {
+			found = true
+			if n.Address != "10.0.0.1:8080" {
+				t.Errorf("address = %q, want 10.0.0.1:8080", n.Address)
+			}
+			if n.Status != StatusDisconnected {
+				t.Errorf("status = %q, want disconnected", n.Status)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("node-remote not found in nodes list")
+	}
+}
+
+func TestAddOrUpdatePeer_UpdateExisting(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+		Peers: []PeerConfig{
+			{ID: "node-remote", Address: "old:8080"},
+		},
+	})
+
+	// Update the address
+	err := pt.AddOrUpdatePeer("node-remote", "new:9090", false)
+	if err != nil {
+		t.Fatalf("AddOrUpdatePeer failed: %v", err)
+	}
+
+	nodes := pt.ListNodes()
+	for _, n := range nodes {
+		if n.ID == "node-remote" {
+			if n.Address != "new:9090" {
+				t.Errorf("address = %q, want new:9090", n.Address)
+			}
+			return
+		}
+	}
+	t.Fatal("node-remote not found after update")
+}
+
+func TestAddOrUpdatePeer_SelfRejected(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+	})
+
+	err := pt.AddOrUpdatePeer("node-main", "somewhere:8080", false)
+	if err == nil {
+		t.Fatal("expected error when adding local node as peer")
+	}
+}
+
+func TestConnectPeer_Unknown(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+	})
+
+	err := pt.ConnectPeer("nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown peer")
+	}
+}
+
+func TestConnectPeer_LocalRejected(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+	})
+
+	err := pt.ConnectPeer("node-main")
+	if err == nil {
+		t.Fatal("expected error when connecting to local node")
+	}
+}
+
+func TestDisconnectPeer_Unknown(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+	})
+
+	// Disconnect of unknown peer should not error (best-effort)
+	err := pt.DisconnectPeer("nonexistent")
+	if err != nil {
+		t.Fatalf("DisconnectPeer should not error for unknown peer, got: %v", err)
+	}
+}
+
+func TestRemovePeer_RemovesFromListing(t *testing.T) {
+	pt := New(Config{
+		LocalID:   "node-main",
+		LocalName: "dev",
+		Peers: []PeerConfig{
+			{ID: "node-remote", Address: "10.0.0.1:8080"},
+		},
+	})
+
+	// Verify peer exists
+	nodes := pt.ListNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes before remove, got %d", len(nodes))
+	}
+
+	err := pt.RemovePeer("node-remote")
+	if err != nil {
+		t.Fatalf("RemovePeer failed: %v", err)
+	}
+
+	// Verify peer is removed
+	nodes = pt.ListNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node after remove, got %d", len(nodes))
+	}
+	if nodes[0].ID != "node-main" {
+		t.Errorf("expected only local node, got %s", nodes[0].ID)
+	}
+}

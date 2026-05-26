@@ -1405,6 +1405,7 @@ func TestPluginCacheClear_ReturnsNotImplemented(t *testing.T) {
 
 type mockManifestLoader struct {
 	manifest *pluginmanifest.Manifest
+	caps     []string // capabilities exposed by ListPlugins
 }
 
 func (m *mockManifestLoader) LoadManifest(pluginID string) (*pluginmanifest.Manifest, error) {
@@ -1418,9 +1419,13 @@ func (m *mockManifestLoader) ListPlugins() []pluginmanifest.PluginSummary {
 	if m.manifest == nil {
 		return nil
 	}
-	return []pluginmanifest.PluginSummary{
-		{ID: m.manifest.ID, Name: m.manifest.Name, Version: m.manifest.Version, Enabled: true},
+	s := pluginmanifest.PluginSummary{
+		ID: m.manifest.ID, Name: m.manifest.Name, Version: m.manifest.Version, Enabled: true,
 	}
+	if len(m.caps) > 0 {
+		s.Capabilities = m.caps
+	}
+	return []pluginmanifest.PluginSummary{s}
 }
 
 func (m *mockManifestLoader) PluginEnabled(pluginID string) bool {
@@ -4487,5 +4492,110 @@ func TestUpdateStatus(t *testing.T) {
 	}
 	if result["requiresRestart"] != false {
 		t.Error("requiresRestart should default to false")
+	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Terminal manifest capability registration tests
+// ---------------------------------------------------------------------------
+
+func TestTerminalCapabilitiesRegistered(t *testing.T) {
+	manifest, err := pluginmanifest.LoadFile("../../../plugins/terminal/plugin.yaml")
+	if err != nil {
+		t.Fatalf("load terminal manifest: %v", err)
+	}
+
+	var declaredCaps []string
+	for _, perm := range manifest.Core.Permissions {
+		for _, cap := range perm.Capabilities {
+			declaredCaps = append(declaredCaps, cap)
+		}
+	}
+
+	t.Logf("terminal manifest declares %d capabilities", len(declaredCaps))
+
+	for _, cap := range declaredCaps {
+		if !pluginmanifest.KnownCapabilities[cap] {
+			t.Errorf("terminal capability %q not in KnownCapabilities", cap)
+		}
+	}
+
+	// Verify session.destroy is present, session.stop is NOT
+	hasDestroy := false
+	hasStop := false
+	for _, cap := range declaredCaps {
+		if cap == "session.destroy" {
+			hasDestroy = true
+		}
+		if cap == "session.stop" {
+			hasStop = true
+		}
+	}
+	if !hasDestroy {
+		t.Error("terminal manifest should declare session.destroy")
+	}
+	if hasStop {
+		t.Error("terminal manifest should NOT declare session.stop (use session.destroy)")
+	}
+}
+
+func TestPluginListIncludesCapabilities(t *testing.T) {
+	deps := fullPluginDeps(t)
+	deps.Manifests = &mockManifestLoader{
+		manifest: &pluginmanifest.Manifest{
+			ID:      "test-cap-plugin",
+			Version: "1.0.0",
+			Core: &pluginmanifest.CoreSpec{
+				Permissions: []pluginmanifest.PermissionSpec{
+					{ID: "test-perm", Capabilities: []string{"fs.read", "fs.write"}},
+				},
+			},
+		},
+		caps: []string{"fs.read", "fs.write"},
+	}
+	r := New(deps)
+
+	result, err := r.Execute(&types.CapabilityRequest{
+		PluginID:   "sessionnode-core",
+		Capability: "plugin.list",
+		Actor:      types.Actor{Type: "web", ID: "test"},
+		RequestID:  "test-plugin-list",
+	})
+	if err != nil {
+		t.Fatalf("plugin.list: %v", err)
+	}
+
+	plugins, ok := result.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("expected []map[string]interface{}, got %T", result)
+	}
+
+	found := false
+	for _, p := range plugins {
+		pid, _ := p["pluginId"].(string)
+		if pid == "test-cap-plugin" {
+			found = true
+			caps, hasCaps := p["capabilities"]
+			if !hasCaps {
+				t.Errorf("plugin %q should have capabilities field", pid)
+				continue
+			}
+			capList, ok := caps.([]string)
+			if !ok {
+				t.Errorf("plugin %q capabilities should be []string, got %T", pid, caps)
+				continue
+			}
+			t.Logf("plugin %q has %d capabilities", pid, len(capList))
+			if len(capList) == 0 {
+				t.Errorf("plugin %q should have >0 capabilities", pid)
+			}
+			if len(capList) != 2 {
+				t.Errorf("plugin %q should have 2 capabilities, got %d", pid, len(capList))
+			}
+		}
+	}
+	if !found {
+		t.Error("test-cap-plugin not found in plugin.list response")
 	}
 }
