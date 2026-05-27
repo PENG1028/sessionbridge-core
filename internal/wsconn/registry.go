@@ -182,23 +182,27 @@ func (r *Registry) SubscriptionsByConn(connID string) []*Subscription {
 	return out
 }
 
-// PushChunk fans out a stream.chunk message to all subscribers of the
-// given session whose StreamTypes include the given streamType.
+// PushChunk broadcasts a stream.chunk message to every connected client.
 //
-// Non-blocking per subscriber: if a subscriber's write channel is full
-// the message is dropped and a diagnostic log is emitted. A blocked
-// subscriber cannot delay other subscribers or the process output loop.
+// In the current single-tenant architecture all clients receive all push
+// messages. This ensures the App UI SSE endpoint (which holds a long-lived
+// WS connection that never explicitly subscribes) receives real-time process
+// output without requiring a subscription round-trip.
+//
+// Non-blocking per connection: if a connection's write channel is full the
+// message is dropped and a diagnostic log is emitted. A blocked connection
+// cannot delay other connections or the process output loop.
 func (r *Registry) PushChunk(sid types.SessionID, streamType string, seq types.EventSeq, data string) {
 	msg := protocol.NewStreamChunk(sid, streamType, seq, data)
-	r.pushToSubscribers(sid, streamType, msg)
+	r.Broadcast(msg)
 }
 
-// PushSessionEvent sends a session.event message to all subscribers of
-// the session regardless of their stream type filter.
+// PushSessionEvent broadcasts a session.event message to every connected
+// client. See PushChunk for the rationale on broadcast-vs-subscribers.
 func (r *Registry) PushSessionEvent(sid types.SessionID, seq types.EventSeq, eventType string, payload interface{}) {
 	raw, _ := json.Marshal(payload)
 	msg := protocol.NewSessionEvent(sid, seq, eventType, raw)
-	r.pushToSubscribers(sid, "", msg) // "" = no stream filter
+	r.Broadcast(msg)
 }
 
 func (r *Registry) pushToSubscribers(sid types.SessionID, streamType string, msg *protocol.Message) {

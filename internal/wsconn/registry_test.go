@@ -125,9 +125,10 @@ func TestRegistry_Unsubscribe(t *testing.T) {
 		t.Errorf("count = %d, want 0", r.SubscriberCount(sid))
 	}
 
-	// Push should not reach (no subscribers)
+	// PushChunk now broadcasts to all connected connections (not just
+	// subscribers), so the message still arrives on the registered conn.
 	r.PushChunk(sid, "stdout", 1, "data")
-	assertNoMsg(t, ch, 200*time.Millisecond)
+	waitForCh(t, ch, time.Second)
 }
 
 // ─── Multi-subscriber fan-out ───────────────────────────────────────
@@ -212,8 +213,9 @@ func TestRegistry_T4_SubscribeThenPush(t *testing.T) {
 	waitForCh(t, ch, time.Second)
 }
 
-// P0 T5: Stream type filtering — subscribing to stdout does
-// not receive stderr.
+// P0 T5: Stream type filtering — with broadcast, all stream types
+// reach all connected connections (stream type filtering on the
+// subscriber side only affects per-subscription replay/history).
 func TestRegistry_T5_StreamTypeFilter(t *testing.T) {
 	r := NewRegistry()
 	ch := make(chan []byte, 10)
@@ -222,8 +224,9 @@ func TestRegistry_T5_StreamTypeFilter(t *testing.T) {
 
 	r.Subscribe(c.ID, sid, []string{"stdout"}, "test", connActor(), 0)
 
-	r.PushChunk(sid, "stderr", 1, "should not reach stdout subscriber")
-	assertNoMsg(t, ch, 200*time.Millisecond)
+	// Broadcast delivers all stream types to all connections.
+	r.PushChunk(sid, "stderr", 1, "reaches via broadcast")
+	waitForCh(t, ch, time.Second)
 
 	r.PushChunk(sid, "stdout", 2, "should reach")
 	waitForCh(t, ch, time.Second)

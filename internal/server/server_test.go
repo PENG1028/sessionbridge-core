@@ -72,22 +72,7 @@ func wsConnect(t *testing.T, srv *httptest.Server) *websocket.Conn {
 
 func sendAndRecv(t *testing.T, conn *websocket.Conn, msg *protocol.Message) *protocol.Message {
 	t.Helper()
-	data, err := msg.MarshalJSON()
-	if err != nil {
-		t.Fatalf("marshal error: %v", err)
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		t.Fatalf("write error: %v", err)
-	}
-	_, raw, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read error: %v (raw: %s)", err, string(raw))
-	}
-	resp, err := protocol.UnmarshalMessage(raw)
-	if err != nil {
-		t.Fatalf("unmarshal error: %v (raw: %s)", err, string(raw))
-	}
-	return resp
+	return sendAndRecvRequestID(t, conn, msg, string(msg.RequestID))
 }
 
 // sendAndRecvRequestID sends a message and reads responses until it finds one

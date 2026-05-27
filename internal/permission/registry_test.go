@@ -86,3 +86,17 @@ func TestTerminalPluginCapabilitiesInKnownList(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionNodeCoreAppUICapabilities(t *testing.T) {
+	r := NewMapRegistry(AllPluginsCaps)
+	caps := []string{
+		"approval.list",
+		"run.list",
+		"plugin.get",
+	}
+	for _, cap := range caps {
+		if !r.HasCapability("sessionnode-core", cap) {
+			t.Errorf("sessionnode-core should declare %q for App UI proxy calls", cap)
+		}
+	}
+}
