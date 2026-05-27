@@ -331,9 +331,10 @@ func TestProcessSpawn(t *testing.T) {
 
 func TestProcessSpawn_EmptyCommand(t *testing.T) {
 	r := New(testDeps(t))
-	_, err := r.Execute(req("process.spawn", map[string]string{}))
-	if err == nil {
-		t.Fatal("expected error for empty command")
+	// Empty command now defaults to shell ("bash" on unix, "cmd" on windows).
+	m := execOK(t, r, "process.spawn", map[string]string{})
+	if m["sessionId"] == nil || m["sessionId"] == "" {
+		t.Error("missing sessionId for default shell spawn")
 	}
 }
 
@@ -2790,9 +2791,10 @@ func TestRunCreate_DefaultKind(t *testing.T) {
 
 func TestRunCreate_EmptyCommand(t *testing.T) {
 	r := New(testDeps(t))
-	_, err := r.Execute(req("run.create", map[string]string{}))
-	if err == nil {
-		t.Fatal("expected error for empty command")
+	// Empty command now defaults to shell ("bash" on unix, "cmd" on windows).
+	m := execOK(t, r, "run.create", map[string]string{})
+	if m["sessionId"] == nil || m["sessionId"] == "" {
+		t.Error("missing sessionId for default shell create")
 	}
 }
 

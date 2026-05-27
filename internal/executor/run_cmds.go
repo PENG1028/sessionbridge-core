@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/user/sessionnode/go-core/internal/history"
@@ -29,7 +30,12 @@ type spawnRequest struct {
 // resulting session ID. Used by both process.spawn and run.create.
 func spawnManagedProcess(p spawnRequest, req *types.CapabilityRequest, deps *Deps) (types.SessionID, error) {
 	if p.Command == "" {
-		return "", fmt.Errorf("command is required")
+		// Default to OS-native shell when caller doesn't specify.
+		if runtime.GOOS == "windows" {
+			p.Command = "cmd"
+		} else {
+			p.Command = "bash"
+		}
 	}
 
 	pluginID := req.PluginID
