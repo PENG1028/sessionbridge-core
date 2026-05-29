@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/creack/pty"
 	"github.com/user/sessionnode/go-core/pkg/types"
@@ -54,9 +56,38 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 		ws.Cols = 80
 	}
 
-	master, err := pty.StartWithSize(cmd, ws)
+	// Open PTY pair so we can set raw mode on the slave before the child inherits it.
+	master, tty, err := pty.Open()
 	if err != nil {
-		return "", fmt.Errorf("pty start: %w", err)
+		return "", fmt.Errorf("pty open: %w", err)
+	}
+	defer tty.Close()
+
+	if err := pty.Setsize(master, ws); err != nil {
+		master.Close()
+		return "", fmt.Errorf("pty setsize: %w", err)
+	}
+
+	// Disable echo on the slave — the terminal emulator handles display.
+	// Without this, the shell echoes input back to the stream, causing
+	// double characters in the frontend.
+	if err := setRaw(tty.Fd()); err != nil {
+		master.Close()
+		return "", fmt.Errorf("pty set raw: %w", err)
+	}
+
+	// Attach command to the slave.
+	cmd.Stdin = tty
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+	}
+
+	if err := cmd.Start(); err != nil {
+		master.Close()
+		return "", fmt.Errorf("cmd start: %w", err)
 	}
 
 	now := time.Now()
@@ -155,6 +186,25 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 	}()
 
 	return sid, nil
+}
+
+// setRaw disables echo, canonical mode, and signal processing on a terminal fd.
+func setRaw(fd uintptr) error {
+	var termios syscall.Termios
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(&termios))); errno != 0 {
+		return errno
+	}
+	termios.Iflag &^= syscall.BRKINT | syscall.ICRNL | syscall.INPCK | syscall.ISTRIP | syscall.IXON
+	termios.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	termios.Cflag &^= syscall.CSIZE | syscall.PARENB
+	termios.Cflag |= syscall.CS8
+	termios.Cc[syscall.VMIN] = 1
+	termios.Cc[syscall.VTIME] = 0
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(&termios)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 // terminateByHandle is a no-op on Unix — ConPTY processes don't exist here.
