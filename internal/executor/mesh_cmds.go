@@ -215,7 +215,7 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 		"nodeId":      string(deps.Mesh.Identity.NodeID),
 		"publicKey":   hex.EncodeToString(deps.Mesh.Identity.PublicKey),
 		"fingerprint": deps.Mesh.Identity.Fingerprint,
-		"address":     normalizePeerAddress(p.PeerURL),
+		"addressHint": normalizePeerAddress(p.PeerURL),
 	}
 	if p.NameHint != "" {
 		body["nameHint"] = p.NameHint
@@ -266,6 +266,11 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	remoteNodeID := remoteResp.Node.NodeID
 	remotePubKeyHex := remoteResp.Node.PublicKey
 	remoteFingerprint := remoteResp.Node.Fingerprint
+
+	// Reject self-pairing — a node must never be its own peer.
+	if remoteNodeID == string(deps.Mesh.Identity.NodeID) {
+		return nil, &types.CoreError{Code: "INVALID_RESPONSE", Message: "remote peer returned our own nodeId — refusing to pair with self"}
+	}
 
 	// Validate the response fields.
 	if remoteNodeID == "" {

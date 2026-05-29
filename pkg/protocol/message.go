@@ -37,6 +37,10 @@ const (
 	MsgTypePeerResponse  = "peer.response"
 	MsgTypePeerWelcome   = "peer.welcome"
 	MsgTypePeerError     = "peer.error"
+
+	// Mesh call — execute a capability on a trusted peer and return the result.
+	MsgTypeMeshCall   = "mesh.call"
+	MsgTypeMeshResult = "mesh.result"
 )
 
 // Message is the universal WebSocket message envelope.
@@ -328,4 +332,43 @@ func NewPeerError(requestID types.RequestID, code, message string) *Message {
 		OK:        false,
 		Error:     &types.CoreError{Code: code, Message: message},
 	}
+}
+
+// --- Mesh call messages ---
+
+// NewMeshCall creates a mesh.call message that instructs a trusted peer to
+// execute a capability and return the result via mesh.result.
+func NewMeshCall(req *types.CapabilityRequest) *Message {
+	var payload json.RawMessage
+	if req.Payload != nil {
+		payload = req.Payload
+	}
+	return &Message{
+		Type:         MsgTypeMeshCall,
+		RequestID:    req.RequestID,
+		PluginID:     req.PluginID,
+		Capability:   req.Capability,
+		TargetNodeID: req.TargetNodeID,
+		Payload:      payload,
+		ActorType:    "node",
+		ActorID:      req.Actor.ID,
+	}
+}
+
+// NewMeshResult creates a mesh.result message carrying the response from a
+// mesh.call execution.
+func NewMeshResult(resp *types.CapabilityResponse) *Message {
+	m := &Message{
+		Type:      MsgTypeMeshResult,
+		RequestID: resp.RequestID,
+		OK:        resp.OK,
+	}
+	if resp.Error != nil {
+		m.Error = resp.Error
+	}
+	if resp.Payload != nil {
+		data, _ := json.Marshal(resp.Payload)
+		m.Payload = data
+	}
+	return m
 }

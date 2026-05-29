@@ -104,6 +104,7 @@ type PeerTopology struct {
 	pendingMu sync.Mutex
 
 	streamChunkHandler StreamChunkHandler
+	dispatcher         *dispatcher.Dispatcher
 
 	cancelFuncs map[types.NodeID]context.CancelFunc
 	cancelMu    sync.Mutex
@@ -146,6 +147,14 @@ func (pt *PeerTopology) SetStreamChunkHandler(h StreamChunkHandler) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	pt.streamChunkHandler = h
+}
+
+// SetDispatcher wires the capability dispatcher so that incoming mesh.call
+// messages from trusted peers can be executed locally.
+func (pt *PeerTopology) SetDispatcher(d *dispatcher.Dispatcher) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.dispatcher = d
 }
 
 // Start connects to all non-local peers in the background.
@@ -330,7 +339,7 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 	}
 
 	switch msg.Type {
-	case protocol.MsgTypeActionResponse:
+	case protocol.MsgTypeActionResponse, protocol.MsgTypeMeshResult:
 		pt.pendingMu.Lock()
 		ch, ok := pt.pending[msg.RequestID]
 		pt.pendingMu.Unlock()
@@ -350,6 +359,9 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 		}
 		ch <- resp
 
+	case protocol.MsgTypeMeshCall:
+		pt.handleMeshCall(senderID, msg)
+
 	case protocol.MsgTypeStreamChunk, protocol.MsgTypeSessionEvent:
 		pt.mu.RLock()
 		h := pt.streamChunkHandler
@@ -362,6 +374,108 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 
 	default:
 		pt.log.Printf("unhandled message type %q from %s", msg.Type, senderID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mesh call handling (trusted peer -> execute locally -> return mesh.result)
+// ---------------------------------------------------------------------------
+
+// handleMeshCall receives a mesh.call from a trusted peer, executes the
+// capability locally via the dispatcher, and sends mesh.result back.
+func (pt *PeerTopology) handleMeshCall(senderID types.NodeID, msg *protocol.Message) {
+	pt.mu.RLock()
+	peer, ok := pt.peers[senderID]
+	d := pt.dispatcher
+	pt.mu.RUnlock()
+
+	if !ok {
+		pt.log.Printf("mesh.call from unknown peer %s - dropped", senderID)
+		return
+	}
+	if d == nil {
+		pt.log.Printf("mesh.call from %s - no dispatcher wired, dropping", senderID)
+		return
+	}
+
+	req := &types.CapabilityRequest{
+		RequestID:    msg.RequestID,
+		PluginID:     msg.PluginID,
+		Capability:   msg.Capability,
+		TargetNodeID: msg.TargetNodeID,
+		Payload:      msg.Payload,
+		Actor: types.Actor{
+			Type: "node",
+			ID:   string(senderID),
+		},
+	}
+
+	resp := d.Dispatch(req)
+
+	peer.mu.RLock()
+	writeCh := peer.writeCh
+	peer.mu.RUnlock()
+
+	if writeCh == nil {
+		pt.log.Printf("mesh.call result for %s - peer %s disconnected before reply", msg.RequestID, senderID)
+		return
+	}
+
+	resultMsg := protocol.NewMeshResult(resp)
+	data, err := resultMsg.MarshalJSON()
+	if err != nil {
+		pt.log.Printf("mesh.call result marshal error: %v", err)
+		return
+	}
+
+	select {
+	case writeCh <- data:
+	default:
+		pt.log.Printf("mesh.call result for %s - write channel full for %s", msg.RequestID, senderID)
+	}
+}
+
+// ForwardViaMesh sends a capability request to a trusted peer via mesh.call
+// and waits for the mesh.result response.
+func (pt *PeerTopology) ForwardViaMesh(peer *Peer, req *types.CapabilityRequest) (*types.CapabilityResponse, error) {
+	peer.mu.RLock()
+	conn := peer.conn
+	writeCh := peer.writeCh
+	peer.mu.RUnlock()
+
+	if conn == nil {
+		return nil, fmt.Errorf("node %s is not connected", peer.ID)
+	}
+
+	msg := protocol.NewMeshCall(req)
+
+	data, err := msg.MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshal mesh.call: %w", err)
+	}
+
+	ch := make(chan *types.CapabilityResponse, 1)
+	pt.pendingMu.Lock()
+	pt.pending[req.RequestID] = ch
+	pt.pendingMu.Unlock()
+
+	defer func() {
+		pt.pendingMu.Lock()
+		delete(pt.pending, req.RequestID)
+		pt.pendingMu.Unlock()
+	}()
+
+	select {
+	case writeCh <- data:
+	default:
+		return nil, fmt.Errorf("write channel full for node %s", peer.ID)
+	}
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("timeout waiting for mesh.result from node %s", peer.ID)
 	}
 }
 

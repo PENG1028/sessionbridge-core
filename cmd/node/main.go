@@ -81,6 +81,7 @@ func main() {
 	if err := trustStore.Load(); err != nil {
 		log.Printf("[startup] trust store load: %v (starting with empty store)", err)
 	}
+	trustStore.SetLocalNodeID(string(nodeID))
 	log.Printf("[startup] trust store: %d trusted peer(s)", len(trustStore.List()))
 
 	// Logging — structured rotating logs.
@@ -245,6 +246,7 @@ func main() {
 		topo,
 		nodeID,
 	)
+	topo.SetDispatcher(d)
 
 	// Server (with optional TLS)
 	var sv *server.Server

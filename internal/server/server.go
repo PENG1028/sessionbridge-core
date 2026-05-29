@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -569,20 +570,15 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 
 
 // handlePeerInviteAccept handles HTTP POST requests for remote peer pairing.
+// The caller POSTs its own identity (nodeId, publicKey, fingerprint) plus an
+// optional addressHint.  We validate the one-time invite code, store the caller
+// as a trusted peer, and return our identity so the caller can do the same.
 func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"POST required"}`, http.StatusMethodNotAllowed)
 		return
 	}
 
-	if s.identity == nil || s.trustStore == nil {
-		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
-		return
-	}
-	if s.identity == nil || s.trustStore == nil {
-		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
-		return
-	}
 	if s.identity == nil || s.trustStore == nil {
 		http.Error(w, `{"error":"server identity or trust store not configured"}`, http.StatusInternalServerError)
 		return
@@ -599,6 +595,7 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		Fingerprint string `json:"fingerprint"`
 		NameHint    string `json:"nameHint,omitempty"`
 		AddressHint string `json:"addressHint,omitempty"`
+		Address     string `json:"address,omitempty"` // legacy field name from older clients
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -606,8 +603,15 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Code == "" || req.NodeID == "" || req.PublicKey == "" {
-		http.Error(w, `{"error":"code, nodeId, and publicKey are required"}`, http.StatusBadRequest)
+	if req.Code == "" || req.NodeID == "" || req.PublicKey == "" || req.Fingerprint == "" {
+		http.Error(w, `{"error":"code, nodeId, publicKey, and fingerprint are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Reject attempts to pair with self — a node must never be its own peer.
+	if s.identity != nil && req.NodeID == s.identity.NodeID {
+		log.Printf("[peer-invite] rejecting self-pairing attempt from %s", r.RemoteAddr)
+		http.Error(w, `{"error":"cannot pair with yourself"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -618,32 +622,9 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Fingerprint == "" {
-		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
-		return
-	}
-	
-	if req.Fingerprint == "" {
-		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
-		return
-	}
-	
-	if req.Fingerprint == "" {
-		http.Error(w, `{"error":"fingerprint is required"}`, http.StatusBadRequest)
-		return
-	}
-	
 	pubKeyBytes, err := hex.DecodeString(req.PublicKey)
 	if err != nil {
 		http.Error(w, `{"error":"invalid public key encoding"}`, http.StatusBadRequest)
-		return
-	}
-	if len(pubKeyBytes) != ed25519.PublicKeySize {
-		http.Error(w, `{"error":"invalid public key length"}`, http.StatusBadRequest)
-		return
-	}
-	if len(pubKeyBytes) != ed25519.PublicKeySize {
-		http.Error(w, `{"error":"invalid public key length"}`, http.StatusBadRequest)
 		return
 	}
 	if len(pubKeyBytes) != ed25519.PublicKeySize {
@@ -660,10 +641,22 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 	if peerName == "" {
 		peerName = req.NodeID
 	}
+
+	// Prefer addressHint; fall back to legacy "address" field; finally use the
+	// TCP remote address so we have at least one way to reach the peer.
 	addresses := []string{}
-	if req.AddressHint != "" {
-		addresses = append(addresses, req.AddressHint)
+	addrHint := req.AddressHint
+	if addrHint == "" {
+		addrHint = req.Address
 	}
+	if addrHint != "" {
+		addresses = append(addresses, addrHint)
+	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		// Best-effort: assume the peer listens on the same host with the
+		// default peer WebSocket path.  The caller can update this later.
+		addresses = append(addresses, host+":9090")
+	}
+
 	peer := &mesh.TrustedPeer{
 		NodeID:         req.NodeID,
 		Name:           peerName,

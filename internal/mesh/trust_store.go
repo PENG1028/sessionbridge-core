@@ -59,9 +59,10 @@ type trustFilePayload struct {
 // TrustStore manages a persistent, mutable list of trusted peer identities.
 // All public methods are safe for concurrent use.
 type TrustStore struct {
-	mu    sync.RWMutex
-	peers map[string]*TrustedPeer // keyed by nodeID
-	path  string
+	mu          sync.RWMutex
+	peers       map[string]*TrustedPeer // keyed by nodeID
+	path        string
+	localNodeID string // if set, Add rejects peers whose NodeID matches (self-guard)
 }
 
 // NewTrustStore creates a TrustStore that reads from and writes to path.
@@ -70,6 +71,14 @@ func NewTrustStore(path string) *TrustStore {
 		peers: make(map[string]*TrustedPeer),
 		path:  path,
 	}
+}
+
+// SetLocalNodeID configures the local node ID for self-guard validation.
+// After this is called, Add will reject any peer whose NodeID matches.
+func (ts *TrustStore) SetLocalNodeID(nodeID string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.localNodeID = nodeID
 }
 
 // Load reads the trust file from disk. If the file does not exist the store
@@ -159,6 +168,15 @@ func (ts *TrustStore) Add(peer *TrustedPeer) error {
 	if len(peer.PublicKey) != ed25519.PublicKeySize {
 		return fmt.Errorf("mesh: trusted peer publicKey has wrong length: got %d, want %d", len(peer.PublicKey), ed25519.PublicKeySize)
 	}
+
+	// Reject self-referential entries — a node must never be its own peer.
+	ts.mu.RLock()
+	localID := ts.localNodeID
+	ts.mu.RUnlock()
+	if localID != "" && peer.NodeID == localID {
+		return fmt.Errorf("mesh: refusing to add self (%s) as trusted peer", localID)
+	}
+
 	cp := peer.deepCopy()
 
 	ts.mu.Lock()
