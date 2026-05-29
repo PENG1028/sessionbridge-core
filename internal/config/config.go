@@ -456,7 +456,7 @@ func (m *Manager) Set(key string, value interface{}) error {
 	m.config.Revision++
 	log.Printf("[config] %s = %v (rev %d)", key, value, m.config.Revision)
 	m.config = applyDefaults(m.config) // re-apply defaults after mutation
-	return nil
+	return m.saveLocked()
 }
 
 // setField navigates into v following parts[0], then recurses with parts[1:].
