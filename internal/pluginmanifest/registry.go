@@ -222,11 +222,12 @@ func (r *PluginRegistry) AllConflicts() []Conflict {
 func (r *PluginRegistry) CapabilityMap() map[string][]string {
 	out := make(map[string][]string)
 	for id, entry := range r.plugins {
-		if len(entry.errs) > 0 {
-			continue // skip errored plugins
+		// Skip synthetically constructed plugins (load errors).
+		if len(entry.errs) > 0 && entry.manifest.Version == "0.0.0" && entry.manifest.Name == id {
+			continue
 		}
 		if !r.enabled[id] {
-			continue // skip disabled plugins
+			continue
 		}
 		if entry.manifest.Core == nil {
 			continue

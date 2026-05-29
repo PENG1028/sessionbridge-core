@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -14,10 +15,31 @@ import (
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
+// unixPTYDriver implements PTYDriver for Unix platforms (Linux/macOS)
+// using the creack/pty library which opens /dev/ptmx (Unix98 PTY).
+type unixPTYDriver struct {
+	master *os.File
+}
+
+func (d *unixPTYDriver) Write(data string) error {
+	_, err := io.WriteString(d.master, data)
+	return err
+}
+
+func (d *unixPTYDriver) Resize(cols, rows int) error {
+	ws := &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	return pty.Setsize(d.master, ws)
+}
+
+func (d *unixPTYDriver) Close() error {
+	return d.master.Close()
+}
+
+func (d *unixPTYDriver) PtyMode() string { return "unix-pty" }
+
 // SpawnPTY starts a new OS process with a PTY (pseudo-terminal).
 // The PTY merges stdout and stderr into a single "stdout" stream and
 // supports interactive programs (vim, top, shells, etc.).
-// cfg carries optional metadata; pass nil for defaults.
 func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows int, cfg *SpawnConfig) (types.SessionID, error) {
 	cmd := exec.Command(command, args...)
 	if cwd != "" {
@@ -70,8 +92,7 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 		State:           "running",
 		CreatedAt:       now.UnixMilli(),
 		PID:             cmd.Process.Pid,
-		ptyMaster:       master,
-		pty:             true,
+		ptyDriver:       &unixPTYDriver{master: master},
 	}
 
 	m.mu.Lock()
@@ -136,24 +157,7 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 	return sid, nil
 }
 
-// Resize changes the PTY window size for the given session.
-func (m *Manager) Resize(sid types.SessionID, cols, rows int) error {
-	m.mu.Lock()
-	proc, ok := m.processes[sid]
-	m.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("process not found: %s", sid)
-	}
-	if !proc.pty {
-		return fmt.Errorf("process %s is not a PTY session", sid)
-	}
-	if proc.State != "running" {
-		return fmt.Errorf("process %s is not running (state: %s)", sid, proc.State)
-	}
-
-	ws := &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
-	if err := pty.Setsize(proc.ptyMaster, ws); err != nil {
-		return fmt.Errorf("resize error: %w", err)
-	}
-	return nil
+// terminateByHandle is a no-op on Unix — ConPTY processes don't exist here.
+func terminateByHandle(_ uintptr) error {
+	return fmt.Errorf("process handle signaling not supported on this platform")
 }

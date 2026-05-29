@@ -57,7 +57,7 @@ var Matrix = map[string]map[string]platformRule{
 
 	// ── process family (platform-specific) ──
 	"process.spawn": {
-		"windows": {SupportPartial, "pipe_fallback", "PTY unavailable on Windows without ConPTY"},
+		"windows": {SupportFull, "", ""},
 		"linux":   {SupportFull, "", ""},
 		"darwin":  {SupportFull, "", "sandbox_tcc"},
 	},
@@ -67,7 +67,7 @@ var Matrix = map[string]map[string]platformRule{
 		"darwin":  {SupportFull, "", ""},
 	},
 	"process.resize": {
-		"windows": {SupportUnsupported, "no_pty_resize", ""},
+		"windows": {SupportFull, "", ""},
 		"linux":   {SupportFull, "", ""},
 		"darwin":  {SupportFull, "", ""},
 	},

@@ -624,9 +624,73 @@ func TestSpawnPTY_OnWindows(t *testing.T) {
 	defer m.Cleanup()
 
 	echoBin := testutil.EchoBinary(t)
-	_, err := m.SpawnPTY(echoBin, []string{"test"}, "", 80, 40, nil)
+	sid, err := m.SpawnPTY(echoBin, []string{"test"}, "", 80, 40, nil)
 	if err != nil {
 		t.Fatalf("SpawnPTY failed: %v", err)
+	}
+
+	// Wait for output and process exit.
+	time.Sleep(2 * time.Second)
+
+	proc := m.Get(sid)
+	if proc == nil {
+		t.Fatal("expected non-nil process")
+	}
+
+	chunks := tr.getChunks()
+	if proc.State == "running" {
+		t.Logf("process still running after 2s, chunks received: %d", len(chunks))
+	} else {
+		t.Logf("process state: %s (exitCode=%d), chunks: %d", proc.State, proc.ExitCode, len(chunks))
+	}
+
+	// Verify at least the process exited (ConPTY output delivery may vary
+	// by platform version, but the spawn itself must succeed).
+	if proc.State != "exited" {
+		t.Errorf("expected exited state, got %s", proc.State)
+	}
+}
+
+func TestSpawnPTY_NodePTYShellOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only")
+	}
+	if _, _, _, err := resolveNodePTYSidecar(); err != nil {
+		t.Skipf("node-pty sidecar unavailable: %v", err)
+	}
+
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+	defer m.Cleanup()
+
+	sid, err := m.SpawnPTY("cmd.exe", []string{"/C", "echo", "nodepty-ok"}, "", 80, 24, nil)
+	if err != nil {
+		t.Fatalf("SpawnPTY cmd.exe: %v", err)
+	}
+
+	proc := m.Get(sid)
+	if proc == nil {
+		t.Fatal("expected non-nil process")
+	}
+	if got := proc.PtyMode(); got != "node-pty" {
+		t.Fatalf("PtyMode = %q, want node-pty", got)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		proc = m.Get(sid)
+		if proc != nil && proc.State == "exited" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if proc == nil || proc.State != "exited" {
+		t.Fatalf("expected exited node-pty process, got %#v", proc)
+	}
+
+	chunks := strings.Join(tr.getChunks(), "")
+	if !strings.Contains(chunks, "nodepty-ok") {
+		t.Fatalf("expected node-pty output, got %q", chunks)
 	}
 }
 
@@ -642,16 +706,8 @@ func TestResize_NoPTY(t *testing.T) {
 	}
 
 	err = m.Resize(sid, 80, 40)
-	if runtime.GOOS == "windows" {
-		// Windows: Resize is a no-op on pipe-based processes.
-		if err != nil {
-			t.Fatalf("Resize should be no-op on Windows, got: %v", err)
-		}
-	} else {
-		// Unix: Resize on a non-PTY process should return an error.
-		if err == nil {
-			t.Fatal("expected error for Resize on non-PTY process")
-		}
+	if err != nil {
+		t.Fatalf("Resize on non-PTY process should silently succeed (avoid 502 proxy errors): %v", err)
 	}
 }
 

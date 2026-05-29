@@ -87,7 +87,7 @@ func TestProcessSpawnPlatforms(t *testing.T) {
 		want    SupportLevel
 		wantSup bool
 	}{
-		{desktop(), SupportPartial, true},
+		{desktop(), SupportFull, true},
 		{linux(), SupportFull, true},
 		{darwin(), SupportFull, true},
 		{mobile(), SupportUnsupported, false},
@@ -107,11 +107,11 @@ func TestProcessSpawnPlatforms(t *testing.T) {
 	// Windows specific detail check
 	r := Resolver{Platform: desktop()}
 	cs := r.CheckCapability("process.spawn")
-	if cs.Reason != "pipe_fallback" {
-		t.Errorf("process.spawn on windows: Reason = %q, want pipe_fallback", cs.Reason)
+	if cs.Reason != "" {
+		t.Errorf("process.spawn on windows: Reason = %q, want empty", cs.Reason)
 	}
-	if cs.Detail == "" {
-		t.Error("process.spawn on windows: Detail should not be empty")
+	if cs.Detail != "" {
+		t.Errorf("process.spawn on windows: Detail = %q, want empty", cs.Detail)
 	}
 
 	// Darwin detail check
@@ -125,11 +125,11 @@ func TestProcessSpawnPlatforms(t *testing.T) {
 func TestProcessResizePlatforms(t *testing.T) {
 	rWin := Resolver{Platform: desktop()}
 	cs := rWin.CheckCapability("process.resize")
-	if cs.Level != SupportUnsupported {
-		t.Errorf("process.resize on windows: got %s, want %s", cs.Level, SupportUnsupported)
+	if cs.Level != SupportFull {
+		t.Errorf("process.resize on windows: got %s, want %s", cs.Level, SupportFull)
 	}
-	if cs.Reason != "no_pty_resize" {
-		t.Errorf("process.resize on windows: Reason = %q, want no_pty_resize", cs.Reason)
+	if cs.Reason != "" {
+		t.Errorf("process.resize on windows: Reason = %q, want empty", cs.Reason)
 	}
 
 	rLinux := Resolver{Platform: linux()}

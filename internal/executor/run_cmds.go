@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"os/exec"
 	"runtime"
 	"time"
 
@@ -30,9 +31,8 @@ type spawnRequest struct {
 // resulting session ID. Used by both process.spawn and run.create.
 func spawnManagedProcess(p spawnRequest, req *types.CapabilityRequest, deps *Deps) (types.SessionID, error) {
 	if p.Command == "" {
-		// Default to OS-native shell when caller doesn't specify.
 		if runtime.GOOS == "windows" {
-			p.Command = "cmd"
+			p.Command = defaultWindowsShell()
 		} else {
 			p.Command = "bash"
 		}
@@ -154,12 +154,22 @@ func runCreate(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		r = deps.RunStore.Create(r)
 	}
 
+	ptyMode := "pipe"
+	if p.Pty && deps.Processes != nil {
+		if proc := deps.Processes.Get(sid); proc != nil {
+			ptyMode = proc.PtyMode()
+		} else {
+			ptyMode = "pty"
+		}
+	}
+
 	return map[string]interface{}{
 		"runId":     r.RunID,
 		"sessionId": string(sid),
 		"processId": string(sid),
 		"state":     r.State,
 		"policy":    r.Policy,
+		"ptyMode":   ptyMode,
 	}, nil
 }
 
@@ -563,5 +573,13 @@ func runToMap(r *run.Run) map[string]interface{} {
 	}
 }
 
-// Ensure time is used (for spawnManagedProcess future use)
+func defaultWindowsShell() string {
+	for _, shell := range []string{"pwsh.exe", "pwsh", "powershell.exe", "powershell", "cmd.exe"} {
+		if _, err := exec.LookPath(shell); err == nil {
+			return shell
+		}
+	}
+	return "cmd.exe"
+}
+
 var _ = time.Now

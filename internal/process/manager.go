@@ -33,8 +33,17 @@ type Process struct {
 	CreatedAt       int64
 	PID             int
 	StdinPipe       io.WriteCloser
-	ptyMaster       *os.File // non-nil for PTY sessions
-	pty             bool     // true when spawned via SpawnPTY
+	ptyDriver       PTYDriver // non-nil for PTY sessions (SpawnPTY)
+	processHandle   uintptr   // OS process handle (used on Windows ConPTY)
+}
+
+// PtyMode returns the PTY backend identifier for diagnostics, or "pipe"
+// if no PTY driver is attached.
+func (p *Process) PtyMode() string {
+	if p.ptyDriver != nil {
+		return p.ptyDriver.PtyMode()
+	}
+	return "pipe"
 }
 
 // SpawnConfig carries optional metadata for spawning a process.
@@ -266,17 +275,55 @@ func (m *Manager) Signal(sid types.SessionID, signal string, tree bool) error {
 }
 
 func signalProcess(proc *Process, signal string) error {
+	// ConPTY processes (processHandle != 0) don't use exec.Cmd.
+	// Fall back to raw handle termination for kill signals.
 	switch signal {
 	case "kill", "SIGKILL", "terminate", "SIGTERM":
-		return proc.Cmd.Process.Kill()
-	case "interrupt", "SIGINT":
-		if err := proc.Cmd.Process.Signal(os.Interrupt); err != nil {
-			proc.Cmd.Process.Kill()
+		if proc.processHandle != 0 {
+			return terminateByHandle(proc.processHandle)
 		}
-		return nil
+		if proc.ptyDriver != nil {
+			return proc.ptyDriver.Close()
+		}
+		if proc.Cmd != nil && proc.Cmd.Process != nil {
+			return proc.Cmd.Process.Kill()
+		}
+		return fmt.Errorf("no process handle")
+	case "interrupt", "SIGINT":
+		if proc.Cmd != nil && proc.Cmd.Process != nil {
+			if err := proc.Cmd.Process.Signal(os.Interrupt); err != nil {
+				proc.Cmd.Process.Kill()
+			}
+			return nil
+		}
+		if proc.processHandle != 0 {
+			return terminateByHandle(proc.processHandle)
+		}
+		return fmt.Errorf("no process handle")
 	default:
 		return fmt.Errorf("unsupported signal: %s", signal)
 	}
+}
+
+// Resize changes the terminal window size for the given session.
+// Pipe-mode processes silently no-op since resize has no effect.
+func (m *Manager) Resize(sid types.SessionID, cols, rows int) error {
+	m.mu.Lock()
+	proc, ok := m.processes[sid]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("process not found: %s", sid)
+	}
+	if proc.ptyDriver == nil {
+		// Pipe-mode process — resize has no effect, but returning an
+		// error here becomes a 502 Bad Gateway through the proxy.
+		// Silently succeed instead.
+		return nil
+	}
+	if proc.State != "running" {
+		return fmt.Errorf("process %s is not running (state: %s)", sid, proc.State)
+	}
+	return proc.ptyDriver.Resize(cols, rows)
 }
 
 // WriteStdin writes data to the process's stdin (or PTY master).
@@ -291,12 +338,8 @@ func (m *Manager) WriteStdin(sid types.SessionID, data string) error {
 		return fmt.Errorf("process %s is not running (state: %s)", sid, proc.State)
 	}
 
-	if proc.pty {
-		_, err := io.WriteString(proc.ptyMaster, data)
-		if err != nil {
-			return fmt.Errorf("pty write error: %w", err)
-		}
-		return nil
+	if proc.ptyDriver != nil {
+		return proc.ptyDriver.Write(data)
 	}
 
 	if proc.StdinPipe == nil {
@@ -304,10 +347,7 @@ func (m *Manager) WriteStdin(sid types.SessionID, data string) error {
 	}
 	// Pipe-based processes (non-PTY) expect \n as line terminator,
 	// but xterm sends \r. Convert to avoid buffered input on Windows.
-	writeData := data
-	if !proc.pty {
-		writeData = strings.ReplaceAll(data, "\r", "\n")
-	}
+	writeData := strings.ReplaceAll(data, "\r", "\n")
 	_, err := io.WriteString(proc.StdinPipe, writeData)
 	if err != nil {
 		return fmt.Errorf("stdin write error: %w", err)
@@ -352,8 +392,8 @@ func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for sid, proc := range m.processes {
-		if proc.ptyMaster != nil {
-			proc.ptyMaster.Close()
+		if proc.ptyDriver != nil {
+			proc.ptyDriver.Close()
 		}
 		if proc.StdinPipe != nil {
 			proc.StdinPipe.Close()

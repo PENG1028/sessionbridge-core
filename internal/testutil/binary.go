@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	fmt.Print(strings.Join(os.Args[1:], " "))
+	fmt.Println(strings.Join(os.Args[1:], " "))
 }
 `)
 }
