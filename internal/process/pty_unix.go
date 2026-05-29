@@ -198,6 +198,7 @@ func setRaw(fd uintptr) error {
 	termios.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
 	termios.Cflag &^= syscall.CSIZE | syscall.PARENB
 	termios.Cflag |= syscall.CS8
+	termios.Oflag |= syscall.ONLCR
 	termios.Cc[syscall.VMIN] = 1
 	termios.Cc[syscall.VTIME] = 0
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(&termios)))
