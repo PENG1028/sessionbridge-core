@@ -18,6 +18,7 @@ type Connection struct {
 	WriteCh     chan<- []byte
 	Actor       types.Actor
 	ConnectedAt time.Time
+	closed      atomic.Bool
 }
 
 // Subscription links a connection to a session's streams.
@@ -83,6 +84,9 @@ func (r *Registry) UnregisterConn(connID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if c, ok := r.conns[connID]; ok {
+		c.closed.Store(true)
+	}
 	delete(r.conns, connID)
 
 	for subID, sub := range r.byConn[connID] {
@@ -238,7 +242,7 @@ func (r *Registry) pushToSubscribers(sid types.SessionID, streamType string, msg
 		r.mu.RLock()
 		conn := r.conns[sub.ConnID]
 		r.mu.RUnlock()
-		if conn == nil {
+		if conn == nil || conn.closed.Load() {
 			continue
 		}
 		select {
@@ -265,6 +269,9 @@ func (r *Registry) Broadcast(msg *protocol.Message) {
 	r.mu.RUnlock()
 
 	for _, c := range list {
+		if c.closed.Load() {
+			continue
+		}
 		select {
 		case c.WriteCh <- data:
 		default:
