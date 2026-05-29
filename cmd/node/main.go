@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -34,8 +36,6 @@ func main() {
 	tlsCert := os.Getenv("SESSIONNODE_TLS_CERT")
 	tlsKey := os.Getenv("SESSIONNODE_TLS_KEY")
 	nodeID := types.NodeID(getEnv("NODE_ID", "node_local"))
-	token := os.Getenv("SESSIONNODE_TOKEN")
-
 	// Config — load from file or create defaults.
 	cfgPath := os.Getenv("SESSIONNODE_CONFIG")
 	if cfgPath == "" {
@@ -47,6 +47,18 @@ func main() {
 		log.Fatalf("config load: %v", err)
 	}
 	cfg := cfgMgr.Get()
+
+	// Token resolution: env → config file → auto-generate
+	token := os.Getenv("SESSIONNODE_TOKEN")
+	if token == "" && cfg.Core.Auth.AdminToken != "" {
+		token = cfg.Core.Auth.AdminToken
+		log.Printf("[startup] using token from config file")
+	}
+	if token == "" && os.Getenv("SESSIONNODE_ALLOW_INSECURE") != "1" {
+		token = generateToken()
+		log.Printf("[startup] auto-generated token (saved to %s)", cfgPath)
+		cfgMgr.Set("core.auth.adminToken", token)
+	}
 
 	addr := getEnv("LISTEN_ADDR", cfg.Core.ListenAddr)
 
@@ -283,6 +295,15 @@ func isPublicAddr(addr string) bool {
 		return true
 	}
 	return false
+}
+
+// generateToken creates a 32-byte random hex token and logs it.
+func generateToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("failed to generate random token: %v", err)
+	}
+	return hex.EncodeToString(b)
 }
 
 // validatePublicAccess fails fast when listening on a public address without a token.
