@@ -53,10 +53,24 @@ func nodePeerList(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 			case "connecting":
 				status = "connecting"
 			case "disconnected":
-				status = "reconnecting"
+				// Topology may show disconnected for peers that connected inbound.
+				// Check trust store for the real state.
+				if tp.Status == mesh.TrustStatusConnected {
+					status = "connected"
+				} else if tp.Status == mesh.TrustStatusReconnecting {
+					status = "reconnecting"
+				} else {
+					status = "reconnecting"
+				}
 			case "local":
 				status = "connected"
 			}
+		} else if tp.Status == mesh.TrustStatusConnected {
+			// Topology does not track this peer (e.g. it connected inbound
+			// to us), but the trust store was updated by handlePeerWS.
+			status = "connected"
+		} else if tp.Status == mesh.TrustStatusReconnecting {
+			status = "reconnecting"
 		}
 		switch tp.Status {
 		case mesh.TrustStatusRevoked:
@@ -100,7 +114,13 @@ func nodePeerInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 				case "connecting":
 					runtimeStatus = "connecting"
 				case "disconnected":
-					runtimeStatus = "reconnecting"
+					if tp.Status == mesh.TrustStatusConnected {
+						runtimeStatus = "connected"
+					} else if tp.Status == mesh.TrustStatusReconnecting {
+						runtimeStatus = "reconnecting"
+					} else {
+						runtimeStatus = "reconnecting"
+					}
 				}
 				break
 			}
@@ -108,6 +128,12 @@ func nodePeerInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 	}
 
 	status := runtimeStatus
+	if runtimeStatus == "offline" && tp.Status == mesh.TrustStatusConnected {
+		status = "connected"
+	}
+	if runtimeStatus == "offline" && tp.Status == mesh.TrustStatusReconnecting {
+		status = "reconnecting"
+	}
 	switch tp.Status {
 	case mesh.TrustStatusRevoked:
 		status = "revoked"

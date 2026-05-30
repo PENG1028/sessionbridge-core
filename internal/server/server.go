@@ -28,14 +28,6 @@ import (
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
-// peerTopology is the subset of topology.PeerTopology that server.go needs.
-// Defined as an interface to avoid a circular import (topology tests depend
-// on server, and server would otherwise depend on topology).
-type peerTopology interface {
-	AddOrUpdatePeer(id types.NodeID, address string, autoReconnect bool) error
-	SetPeerStatus(nodeID types.NodeID, status string) error
-	DisconnectPeer(nodeID types.NodeID) error
-}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:   4096,
@@ -75,9 +67,6 @@ type Server struct {
 	// used by the dispatcher's TokenAuthenticator.
 	token string
 
-	// Topology for registering inbound peer connections so they appear in
-	// node.list with the correct status. Set via SetTopology; nil is safe.
-	topo peerTopology
 
 	// Invite store for remote pairing via /peer/invite/accept.
 	inviteStore *mesh.InviteStore
@@ -112,12 +101,6 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 // SetInviteStore sets the invite store for remote pairing.
 func (s *Server) SetInviteStore(is *mesh.InviteStore) {
 	s.inviteStore = is
-}
-
-// SetTopology sets the topology for inbound peer registration. Must be
-// called before any peer connections are accepted; nil is safe.
-func (s *Server) SetTopology(topo peerTopology) {
-	s.topo = topo
 }
 
 func (s *Server) registerHandlers() {
@@ -528,19 +511,12 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[peer-ws] handshake complete for peer %s", peerNodeID)
 
-	// Update last seen in trust store. Runtime status is tracked by topology.
-	s.trustStore.UpdateLastSeen(peerNodeID)
-
-	// Register the inbound peer in topology so it appears in node.list with
-	// the correct connected status. AutoReconnect=false means topology will
-	// NOT attempt outbound connections (this peer connected to us).
-	if s.topo != nil {
-		peerAddr := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			peerAddr = host + ":9090"
-		}
-		_ = s.topo.AddOrUpdatePeer(types.NodeID(peerNodeID), peerAddr, false)
-		_ = s.topo.SetPeerStatus(types.NodeID(peerNodeID), "connected")
+	// Mark the peer as connected in the trust store so UI reflects the real state.
+	if err := s.trustStore.UpdatePeer(peerNodeID, func(p *mesh.TrustedPeer) {
+		p.Status = mesh.TrustStatusConnected
+		p.LastSeen = time.Now().UnixMilli()
+	}); err != nil {
+		log.Printf("[peer-ws] trust store status update failed for %s: %v", peerNodeID, err)
 	}
 
 	// Step 7: Register as peer connection (server-side tracking).
@@ -603,9 +579,16 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	writeWg.Wait()
 	conn.Close()
 
-	// Notify topology so the peer's node.list status reflects the disconnection.
-	if s.topo != nil {
-		s.topo.DisconnectPeer(types.NodeID(peerNodeID))
+	// Mark peer as reconnecting; auto-reconnect peers may come back quickly and
+	// should not flicker as fully offline in the UI during transient drops.
+	if err := s.trustStore.UpdatePeer(peerNodeID, func(p *mesh.TrustedPeer) {
+		if p.AutoReconnect {
+			p.Status = mesh.TrustStatusReconnecting
+		} else {
+			p.Status = mesh.TrustStatusOffline
+		}
+	}); err != nil {
+		log.Printf("[peer-ws] trust store disconnect update failed for %s: %v", peerNodeID, err)
 	}
 	log.Printf("[peer-ws] peer %s disconnected", peerNodeID)
 }
