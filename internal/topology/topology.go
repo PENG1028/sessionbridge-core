@@ -350,6 +350,7 @@ func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*type
 	// Send via peer's write channel
 	select {
 	case writeCh <- data:
+		pt.log.Printf("forward: sent to %s, waiting for response", peer.ID)
 	default:
 		return nil, fmt.Errorf("write channel full for node %s", peer.ID)
 	}
@@ -544,6 +545,7 @@ func (pt *PeerTopology) ForwardViaMesh(peer *Peer, req *types.CapabilityRequest)
 
 	select {
 	case writeCh <- data:
+		pt.log.Printf("forward: sent to %s, waiting for response", peer.ID)
 	default:
 		return nil, fmt.Errorf("write channel full for node %s", peer.ID)
 	}
