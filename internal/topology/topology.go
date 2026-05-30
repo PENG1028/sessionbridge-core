@@ -405,6 +405,7 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 		}
 
 	case protocol.MsgTypeActionRequest:
+		pt.log.Printf("received action.request from %s: cap=%s", senderID, msg.Capability)
 		// A forwarded capability request from a peer. Dispatch locally.
 		if pt.dispatcher != nil {
 			req := &types.CapabilityRequest{
@@ -420,6 +421,7 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 			}
 			req.Actor.Token = pt.authToken
 			resp := pt.dispatcher.Dispatch(req)
+			pt.log.Printf("dispatch result for %s: ok=%v", req.Capability, resp != nil && resp.OK)
 			resultMsg := protocol.NewActionResponse(resp)
 			data, _ := resultMsg.MarshalJSON()
 
