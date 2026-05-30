@@ -569,6 +569,17 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		// Route responses/streams through topology HandleMessage
+		if s.topo != nil {
+			var pm protocol.Message
+			if err := json.Unmarshal(raw, &pm); err == nil {
+				if pm.Type != protocol.MsgTypeActionRequest && pm.Type != protocol.MsgTypeMeshCall {
+					s.topo.HandleMessage(types.NodeID(peerNodeID), raw)
+					continue
+				}
+			}
+		}
+
 		resp := s.handleMessage(raw, connID)
 		if resp == nil {
 			continue
