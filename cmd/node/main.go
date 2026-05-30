@@ -257,6 +257,7 @@ func main() {
 		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
 		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	}
+	sv.SetTopology(topo)
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
 	fmt.Printf("  Node ID: %s\n", nodeID)

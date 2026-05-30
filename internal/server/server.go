@@ -28,6 +28,11 @@ import (
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
+// peerTopology registers inbound write channels for forwarding.
+type peerTopology interface {
+	SetInboundWriteCh(nodeID types.NodeID, writeCh chan []byte)
+	ClearInboundWriteCh(nodeID types.NodeID)
+}
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:   4096,
@@ -67,6 +72,7 @@ type Server struct {
 	// used by the dispatcher's TokenAuthenticator.
 	token string
 
+	topo peerTopology
 
 	// Invite store for remote pairing via /peer/invite/accept.
 	inviteStore *mesh.InviteStore
@@ -101,6 +107,11 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 // SetInviteStore sets the invite store for remote pairing.
 func (s *Server) SetInviteStore(is *mesh.InviteStore) {
 	s.inviteStore = is
+}
+
+// SetTopology sets the topology for inbound peer forwarding.
+func (s *Server) SetTopology(topo peerTopology) {
+	s.topo = topo
 }
 
 func (s *Server) registerHandlers() {
@@ -535,6 +546,12 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	s.peerConns[connID] = peerNodeID
 	s.peerConnsMu.Unlock()
 
+	// Register the inbound write channel so topology can forward
+	// requests through this connection.
+	if s.topo != nil {
+		s.topo.SetInboundWriteCh(types.NodeID(peerNodeID), writeCh)
+	}
+
 	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
@@ -573,6 +590,11 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	s.peerConnsMu.Lock()
 	delete(s.peerConns, connID)
 	s.peerConnsMu.Unlock()
+
+	// Clear inbound write channel before closing.
+	if s.topo != nil {
+		s.topo.ClearInboundWriteCh(types.NodeID(peerNodeID))
+	}
 
 	s.connRegistry.UnregisterConn(connID)
 	close(writeCh)

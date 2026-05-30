@@ -117,6 +117,11 @@ type PeerTopology struct {
 
 	mu  sync.RWMutex
 	log *log.Logger
+
+	// Inbound write channels — peers that connected to us via /peer/ws.
+	// Used by forward() when no outbound connection exists.
+	inboundWriters map[types.NodeID]chan []byte
+	inboundMu      sync.RWMutex
 }
 
 // New creates a PeerTopology. The local node is registered automatically
@@ -126,10 +131,11 @@ func New(cfg Config) *PeerTopology {
 		localID:     cfg.LocalID,
 		localName:   cfg.LocalName,
 		identity:    cfg.Identity,
-		peers:       make(map[types.NodeID]*Peer),
-		pending:     make(map[types.RequestID]chan *types.CapabilityResponse),
-		cancelFuncs: make(map[types.NodeID]context.CancelFunc),
-		log:         log.New(log.Writer(), "[topology] ", log.LstdFlags),
+		peers:          make(map[types.NodeID]*Peer),
+		pending:        make(map[types.RequestID]chan *types.CapabilityResponse),
+		cancelFuncs:    make(map[types.NodeID]context.CancelFunc),
+		inboundWriters: make(map[types.NodeID]chan []byte),
+		log:            log.New(log.Writer(), "[topology] ", log.LstdFlags),
 	}
 
 	// Register local node
@@ -273,11 +279,19 @@ func (pt *PeerTopology) ListNodes() []executor.NodeInfo {
 // the response. The request is correlated by RequestID.
 func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*types.CapabilityResponse, error) {
 	peer.mu.RLock()
-	conn := peer.conn
 	writeCh := peer.writeCh
 	peer.mu.RUnlock()
 
-	if conn == nil {
+	// If no outbound write channel, check for an inbound one.
+	// Peers behind NAT connect to us via /peer/ws, and their write
+	// channel is registered by handlePeerWS via SetInboundWriteCh.
+	if writeCh == nil {
+		pt.inboundMu.RLock()
+		writeCh = pt.inboundWriters[peer.ID]
+		pt.inboundMu.RUnlock()
+	}
+
+	if writeCh == nil {
 		return nil, fmt.Errorf("node %s is not connected", peer.ID)
 	}
 
@@ -820,6 +834,23 @@ func (pt *PeerTopology) connectPeerLoop(nodeID types.NodeID) {
 		delete(pt.cancelFuncs, nodeID)
 		pt.cancelMu.Unlock()
 	}()
+}
+
+// SetInboundWriteCh registers the write channel for an inbound peer
+// connection (one that connected to us via /peer/ws). This allows
+// forward() to send requests through the inbound WebSocket.
+func (pt *PeerTopology) SetInboundWriteCh(nodeID types.NodeID, writeCh chan []byte) {
+	pt.inboundMu.Lock()
+	pt.inboundWriters[nodeID] = writeCh
+	pt.inboundMu.Unlock()
+}
+
+// ClearInboundWriteCh removes the inbound write channel for a peer
+// when its inbound connection drops.
+func (pt *PeerTopology) ClearInboundWriteCh(nodeID types.NodeID) {
+	pt.inboundMu.Lock()
+	delete(pt.inboundWriters, nodeID)
+	pt.inboundMu.Unlock()
 }
 
 // AddOrUpdatePeer registers a new peer or updates an existing peer's address
