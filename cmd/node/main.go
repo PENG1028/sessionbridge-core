@@ -48,6 +48,14 @@ func main() {
 	}
 	cfg := cfgMgr.Get()
 
+	// Change to user's home directory so os.Getwd() returns a sensible
+	// default regardless of where the process was launched.
+	if home, err := os.UserHomeDir(); err == nil {
+		if err := os.Chdir(home); err != nil {
+			log.Printf("[startup] chdir to home: %v (continuing)", err)
+		}
+	}
+
 	// Token resolution: env → config file → auto-generate
 	token := os.Getenv("SESSIONNODE_TOKEN")
 	if token == "" && cfg.Core.Auth.AdminToken != "" {

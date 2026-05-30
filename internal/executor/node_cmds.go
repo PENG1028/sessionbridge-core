@@ -78,6 +78,7 @@ func nodeInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 
 func enrichNodeInfo(n NodeInfo) map[string]interface{} {
 	hostname, _ := os.Hostname()
+	cwd, _ := os.Getwd()
 	return map[string]interface{}{
 		"nodeId":      string(n.ID),
 		"name":        n.Name,
@@ -86,6 +87,7 @@ func enrichNodeInfo(n NodeInfo) map[string]interface{} {
 		"status":      n.Status,
 		"displayName": n.DisplayName,
 		"hostname":    hostname,
+		"cwd":         cwd,
 		"os":          runtime.GOOS,
 		"arch":        runtime.GOARCH,
 		"numCPU":      runtime.NumCPU(),
