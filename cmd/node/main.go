@@ -258,6 +258,7 @@ func main() {
 		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	}
 	sv.SetTopology(topo)
+	topo.SetAuthToken(token)
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
 	fmt.Printf("  Node ID: %s\n", nodeID)

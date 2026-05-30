@@ -115,8 +115,9 @@ type PeerTopology struct {
 	cancelFuncs map[types.NodeID]context.CancelFunc
 	cancelMu    sync.Mutex
 
-	mu  sync.RWMutex
-	log *log.Logger
+	mu          sync.RWMutex
+	log         *log.Logger
+	authToken   string // for authenticating forwarded node-to-node requests
 
 	// Inbound write channels — peers that connected to us via /peer/ws.
 	// Used by forward() when no outbound connection exists.
@@ -159,6 +160,12 @@ func (pt *PeerTopology) SetStreamChunkHandler(h StreamChunkHandler) {
 	pt.mu.Lock()
 	defer pt.mu.Unlock()
 	pt.streamChunkHandler = h
+}
+
+// SetAuthToken sets the local auth token for authenticating forwarded
+// node-to-node capability requests.
+func (pt *PeerTopology) SetAuthToken(token string) {
+	pt.authToken = token
 }
 
 // SetDispatcher wires the capability dispatcher so that incoming mesh.call
@@ -289,6 +296,11 @@ func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*type
 		pt.inboundMu.RLock()
 		writeCh = pt.inboundWriters[peer.ID]
 		pt.inboundMu.RUnlock()
+		if writeCh != nil {
+			log.Printf("[forward] using inbound writer for %s", peer.ID)
+		} else {
+			log.Printf("[forward] no inbound writer for %s", peer.ID)
+		}
 	}
 
 	if writeCh == nil {
@@ -392,6 +404,49 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 			pt.log.Printf("stream chunk/event from %s dropped: no handler registered (type=%q session=%s)", senderID, msg.Type, msg.SessionID)
 		}
 
+	case protocol.MsgTypeActionRequest:
+		// A forwarded capability request from a peer. Dispatch locally.
+		if pt.dispatcher != nil {
+			req := &types.CapabilityRequest{
+				RequestID:    msg.RequestID,
+				PluginID:     msg.PluginID,
+				Capability:   msg.Capability,
+				TargetNodeID: msg.TargetNodeID,
+				Payload:      msg.Payload,
+				Actor: types.Actor{
+					Type: "node",
+					ID:   string(senderID),
+				},
+			}
+			req.Actor.Token = pt.authToken
+			resp := pt.dispatcher.Dispatch(req)
+			resultMsg := protocol.NewActionResponse(resp)
+			data, _ := resultMsg.MarshalJSON()
+
+			// Find the write channel to send the response back
+			var writeCh chan []byte
+			pt.mu.RLock()
+			if p, ok := pt.peers[senderID]; ok {
+				p.mu.RLock()
+				writeCh = p.writeCh
+				p.mu.RUnlock()
+			}
+			pt.mu.RUnlock()
+
+			if writeCh == nil {
+				pt.inboundMu.RLock()
+				writeCh = pt.inboundWriters[senderID]
+				pt.inboundMu.RUnlock()
+			}
+
+			if writeCh != nil {
+				select {
+				case writeCh <- data:
+				default:
+					pt.log.Printf("write channel full, dropping response to %s", senderID)
+				}
+			}
+		}
 	default:
 		pt.log.Printf("unhandled message type %q from %s", msg.Type, senderID)
 	}

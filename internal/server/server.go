@@ -32,6 +32,7 @@ import (
 type peerTopology interface {
 	SetInboundWriteCh(nodeID types.NodeID, writeCh chan []byte)
 	ClearInboundWriteCh(nodeID types.NodeID)
+	HandleMessage(senderID types.NodeID, data []byte)
 }
 
 var upgrader = websocket.Upgrader{
@@ -591,11 +592,6 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	delete(s.peerConns, connID)
 	s.peerConnsMu.Unlock()
 
-	// Clear inbound write channel before closing.
-	if s.topo != nil {
-		s.topo.ClearInboundWriteCh(types.NodeID(peerNodeID))
-	}
-
 	s.connRegistry.UnregisterConn(connID)
 	close(writeCh)
 	writeWg.Wait()
@@ -775,6 +771,7 @@ func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.Wait
 			}
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				log.Printf("[ws] write error: %v", err)
+				conn.Close()
 				return
 			}
 		case <-pingTicker.C:
