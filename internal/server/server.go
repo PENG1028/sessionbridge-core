@@ -28,12 +28,27 @@ import (
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
+// peerTopology is the subset of topology.PeerTopology that server.go needs.
+// Defined as an interface to avoid a circular import (topology tests depend
+// on server, and server would otherwise depend on topology).
+type peerTopology interface {
+	AddOrUpdatePeer(id types.NodeID, address string, autoReconnect bool) error
+	SetPeerStatus(nodeID types.NodeID, status string) error
+	DisconnectPeer(nodeID types.NodeID) error
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:   4096,
 	WriteBufferSize:  4096,
 	HandshakeTimeout: 10 * time.Second,
 	CheckOrigin:      func(r *http.Request) bool { return true },
 }
+
+const (
+	wsPongWait     = 120 * time.Second
+	wsPingInterval = 15 * time.Second
+	wsWriteWait    = 10 * time.Second
+)
 
 // Server holds the HTTP server, dispatcher, and all shared state.
 type Server struct {
@@ -50,15 +65,19 @@ type Server struct {
 	connsMu      sync.Mutex
 
 	// Peer authentication — set server-side so peers cannot spoof actor type.
-	identity   *mesh.NodeIdentity
-	trustStore *mesh.TrustStore
-	peerConns  map[string]string // connID → peerNodeID
+	identity    *mesh.NodeIdentity
+	trustStore  *mesh.TrustStore
+	peerConns   map[string]string // connID → peerNodeID
 	peerConnsMu sync.RWMutex
 
 	// Control access token. When non-empty, /ws requires matching ?token= or
 	// Authorization: Bearer header. This is the same SESSIONNODE_TOKEN value
 	// used by the dispatcher's TokenAuthenticator.
 	token string
+
+	// Topology for registering inbound peer connections so they appear in
+	// node.list with the correct status. Set via SetTopology; nil is safe.
+	topo peerTopology
 
 	// Invite store for remote pairing via /peer/invite/accept.
 	inviteStore *mesh.InviteStore
@@ -93,6 +112,12 @@ func NewWithTLS(addr, certFile, keyFile string, d *dispatcher.Dispatcher, s *ses
 // SetInviteStore sets the invite store for remote pairing.
 func (s *Server) SetInviteStore(is *mesh.InviteStore) {
 	s.inviteStore = is
+}
+
+// SetTopology sets the topology for inbound peer registration. Must be
+// called before any peer connections are accepted; nil is safe.
+func (s *Server) SetTopology(topo peerTopology) {
+	s.topo = topo
 }
 
 func (s *Server) registerHandlers() {
@@ -293,9 +318,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[ws] client connected from %s (conn=%s)", r.RemoteAddr, connID)
 
-	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		return nil
 	})
 
@@ -503,6 +528,21 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[peer-ws] handshake complete for peer %s", peerNodeID)
 
+	// Update last seen in trust store. Runtime status is tracked by topology.
+	s.trustStore.UpdateLastSeen(peerNodeID)
+
+	// Register the inbound peer in topology so it appears in node.list with
+	// the correct connected status. AutoReconnect=false means topology will
+	// NOT attempt outbound connections (this peer connected to us).
+	if s.topo != nil {
+		peerAddr := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			peerAddr = host + ":9090"
+		}
+		_ = s.topo.AddOrUpdatePeer(types.NodeID(peerNodeID), peerAddr, false)
+		_ = s.topo.SetPeerStatus(types.NodeID(peerNodeID), "connected")
+	}
+
 	// Step 7: Register as peer connection (server-side tracking).
 	writeCh := make(chan []byte, 128)
 	var writeWg sync.WaitGroup
@@ -519,13 +559,10 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	s.peerConns[connID] = peerNodeID
 	s.peerConnsMu.Unlock()
 
-	// Update last seen in trust store.
-	s.trustStore.UpdateLastSeen(peerNodeID)
-
 	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
-	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		return nil
 	})
 
@@ -565,14 +602,18 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 	close(writeCh)
 	writeWg.Wait()
 	conn.Close()
+
+	// Notify topology so the peer's node.list status reflects the disconnection.
+	if s.topo != nil {
+		s.topo.DisconnectPeer(types.NodeID(peerNodeID))
+	}
 	log.Printf("[peer-ws] peer %s disconnected", peerNodeID)
 }
 
-
 // handlePeerInviteAccept handles HTTP POST requests for remote peer pairing.
-// The caller POSTs its own identity (nodeId, publicKey, fingerprint) plus an
-// optional addressHint.  We validate the one-time invite code, store the caller
-// as a trusted peer, and return our identity so the caller can do the same.
+// The caller POSTs its own identity (nodeId, publicKey, fingerprint). We
+// validate the one-time invite code, store the caller as a trusted peer, and
+// return our identity so the caller can do the same.
 func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"POST required"}`, http.StatusMethodNotAllowed)
@@ -594,8 +635,7 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		PublicKey   string `json:"publicKey"`
 		Fingerprint string `json:"fingerprint"`
 		NameHint    string `json:"nameHint,omitempty"`
-		AddressHint string `json:"addressHint,omitempty"`
-		Address     string `json:"address,omitempty"` // legacy field name from older clients
+		Address     string `json:"address,omitempty"` // legacy field name from older clients, ignored
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -642,16 +682,10 @@ func (s *Server) handlePeerInviteAccept(w http.ResponseWriter, r *http.Request) 
 		peerName = req.NodeID
 	}
 
-	// Prefer addressHint; fall back to legacy "address" field; finally use the
-	// TCP remote address so we have at least one way to reach the peer.
+	// Use the TCP remote address so a caller cannot poison our trust store with
+	// the relay's own address. The legacy address field is intentionally ignored.
 	addresses := []string{}
-	addrHint := req.AddressHint
-	if addrHint == "" {
-		addrHint = req.Address
-	}
-	if addrHint != "" {
-		addresses = append(addresses, addrHint)
-	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
 		// Best-effort: assume the peer listens on the same host with the
 		// default peer WebSocket path.  The caller can update this later.
 		addresses = append(addresses, host+":9090")
@@ -721,10 +755,28 @@ func (s *Server) writePeerError(conn *websocket.Conn, requestID types.RequestID,
 // writeLoop reads from the channel and writes to the WebSocket connection.
 func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for data := range ch {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			log.Printf("[ws] write error: %v", err)
-			return
+	pingTicker := time.NewTicker(wsPingInterval)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case data, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+				log.Printf("[ws] set write deadline error: %v", err)
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("[ws] write error: %v", err)
+				return
+			}
+		case <-pingTicker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait)); err != nil {
+				log.Printf("[ws] ping error: %v", err)
+				return
+			}
 		}
 	}
 }

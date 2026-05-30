@@ -54,6 +54,12 @@ const (
 	StatusConnecting   = "connecting"
 )
 
+const (
+	peerPongWait     = 120 * time.Second
+	peerPingInterval = 15 * time.Second
+	peerWriteWait    = 10 * time.Second
+)
+
 // --- Peer (runtime state) ---
 
 // Peer holds the runtime state for a single known node.
@@ -160,11 +166,11 @@ func (pt *PeerTopology) SetDispatcher(d *dispatcher.Dispatcher) {
 // Start connects to all non-local peers in the background.
 // Blocks until ctx is cancelled, then shuts down all connections.
 func (pt *PeerTopology) Start(ctx context.Context) {
-	for id, peer := range pt.peers {
+	for id := range pt.peers {
 		if id == pt.localID {
 			continue
 		}
-		go pt.connectLoop(ctx, peer)
+		pt.connectPeerLoop(id)
 	}
 	<-ctx.Done()
 	pt.Shutdown()
@@ -574,18 +580,32 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 
 		pt.log.Printf("connected to peer %s (%s)", peer.ID, url)
 
+		conn.SetReadDeadline(time.Now().Add(peerPongWait))
+		conn.SetPongHandler(func(string) error {
+			conn.SetReadDeadline(time.Now().Add(peerPongWait))
+			return nil
+		})
+
 		// Write goroutine — reads from writeCh and sends over WebSocket
 		go func() {
+			pingTicker := time.NewTicker(peerPingInterval)
+			defer pingTicker.Stop()
+
 			for {
 				select {
 				case data, ok := <-writeCh:
 					if !ok {
 						return
 					}
-					if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+					if err := conn.SetWriteDeadline(time.Now().Add(peerWriteWait)); err != nil {
 						return
 					}
 					if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+						return
+					}
+				case <-pingTicker.C:
+					if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(peerWriteWait)); err != nil {
+						conn.Close()
 						return
 					}
 				case <-stopCh:
@@ -786,6 +806,14 @@ func (pt *PeerTopology) connectPeerLoop(nodeID types.NodeID) {
 		return
 	}
 
+	// Close any existing connection so the old read loop unblocks immediately.
+	peer.mu.Lock()
+	if peer.conn != nil {
+		peer.conn.Close()
+		peer.conn = nil
+	}
+	peer.mu.Unlock()
+
 	go func() {
 		pt.connectLoop(ctx, peer)
 		pt.cancelMu.Lock()
@@ -830,6 +858,21 @@ func (pt *PeerTopology) ConnectPeer(nodeID types.NodeID) error {
 	}
 
 	pt.connectPeerLoop(nodeID)
+	return nil
+}
+
+// SetPeerStatus sets the runtime status of a peer (for inbound connections
+// registered via AddOrUpdatePeer that do not have their own connect loop).
+func (pt *PeerTopology) SetPeerStatus(nodeID types.NodeID, status string) error {
+	pt.mu.RLock()
+	peer, ok := pt.peers[nodeID]
+	pt.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("node %s not found in topology", nodeID)
+	}
+	peer.mu.Lock()
+	peer.status = status
+	peer.mu.Unlock()
 	return nil
 }
 

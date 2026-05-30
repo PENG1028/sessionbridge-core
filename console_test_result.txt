@@ -1,0 +1,17 @@
+=== Console Fallback Test (no suspend) ===
+
+Created: PID=36636
+Attached to child console (PID=36636)
+Child console HWND: 18025564
+Hid console window
+Console handles: hOut=424 hIn=432
+Buffer: size=120x9001 cursor=47,2
+Console output:
+  [00] HELLO_CONSOLE_TEST                                                                                                      
+  [01]                                                                                                                         
+  [02] F:\Work Document\project\sessionBridge\go-core>                                                                         
+  [03]                                                                                                                         
+  [04]                                                                                                                         
+  [05]                                                                                                                         
+Detached from console
+Done.

@@ -215,7 +215,6 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 		"nodeId":      string(deps.Mesh.Identity.NodeID),
 		"publicKey":   hex.EncodeToString(deps.Mesh.Identity.PublicKey),
 		"fingerprint": deps.Mesh.Identity.Fingerprint,
-		"addressHint": normalizePeerAddress(p.PeerURL),
 	}
 	if p.NameHint != "" {
 		body["nameHint"] = p.NameHint
@@ -331,9 +330,6 @@ func nodeInviteAccept(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	if deps.Topology != nil {
 		if err := deps.Topology.AddOrUpdatePeer(types.NodeID(remoteNodeID), remoteAddresses[0], true); err != nil {
 			log.Printf("[mesh] invite accept: AddOrUpdatePeer %s: %v", remoteNodeID, err)
-		}
-		if err := deps.Topology.ConnectPeer(types.NodeID(remoteNodeID)); err != nil {
-			log.Printf("[mesh] invite accept: ConnectPeer %s: %v", remoteNodeID, err)
 		}
 	}
 
