@@ -905,6 +905,7 @@ func (pt *PeerTopology) SetInboundWriteCh(nodeID types.NodeID, writeCh chan []by
 	pt.inboundMu.Lock()
 	pt.inboundWriters[nodeID] = writeCh
 	pt.inboundMu.Unlock()
+	log.Printf("[topology] SetInboundWriteCh: %s writeCh=%v", nodeID, writeCh != nil)
 }
 
 // ClearInboundWriteCh removes the inbound write channel for a peer
