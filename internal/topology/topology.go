@@ -429,17 +429,20 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 			// Find the write channel to send the response back
 			var writeCh chan []byte
 			pt.mu.RLock()
-			if p, ok := pt.peers[senderID]; ok {
+			p, peerFound := pt.peers[senderID]
+			if peerFound {
 				p.mu.RLock()
 				writeCh = p.writeCh
 				p.mu.RUnlock()
 			}
 			pt.mu.RUnlock()
+			pt.log.Printf("response: peerFound=%v writeCh==nil=%v", peerFound, writeCh == nil)
 
 			if writeCh == nil {
 				pt.inboundMu.RLock()
 				writeCh = pt.inboundWriters[senderID]
 				pt.inboundMu.RUnlock()
+				pt.log.Printf("response: inbound writer found=%v", writeCh != nil)
 			}
 
 			if writeCh != nil {
