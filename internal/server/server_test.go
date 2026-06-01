@@ -478,50 +478,6 @@ func TestWSProcessSpawnBadCommand(t *testing.T) {
 	}
 }
 
-func TestAPISessions(t *testing.T) {
-	_, srv := testServer(t)
-	defer srv.Close()
-
-	resp, err := srv.Client().Get(srv.URL + "/api/sessions")
-	if err != nil {
-		t.Fatalf("GET /api/sessions error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if _, ok := body["sessions"]; !ok {
-		t.Error("missing sessions field")
-	}
-}
-
-func TestAPIProcesses(t *testing.T) {
-	_, srv := testServer(t)
-	defer srv.Close()
-
-	resp, err := srv.Client().Get(srv.URL + "/api/processes")
-	if err != nil {
-		t.Fatalf("GET /api/processes error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-	var body map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	if _, ok := body["processes"]; !ok {
-		t.Error("missing processes field")
-	}
-}
-
 func TestHealthCheckContentType(t *testing.T) {
 	_, srv := testServer(t)
 	defer srv.Close()

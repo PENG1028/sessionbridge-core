@@ -118,9 +118,6 @@ func (s *Server) SetTopology(topo peerTopology) {
 func (s *Server) registerHandlers() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/api/info", s.handleInfo)
-	mux.HandleFunc("/api/sessions", s.handleSessions)
-	mux.HandleFunc("/api/processes", s.handleProcesses)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/peer/ws", s.handlePeerWS)
 	mux.HandleFunc("/peer/invite/accept", s.handlePeerInviteAccept)
@@ -210,56 +207,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ok",
 		"time":   time.Now().UnixMilli(),
-	})
-}
-
-func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":         "SessionNode Go Core",
-		"version":      "0.3.0",
-		"description":  "Phase 1 — Real process execution + streaming + TLS",
-		"sessionCount": s.sessions.Count(),
-		"procCount":    s.procManager.Count(),
-	})
-}
-
-func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	sessions := s.sessions.List()
-	out := make([]map[string]interface{}, 0, len(sessions))
-	for _, sess := range sessions {
-		out = append(out, map[string]interface{}{
-			"sessionId": string(sess.ID),
-			"pluginId":  string(sess.PluginID),
-			"state":     sess.State,
-			"command":   sess.Command,
-			"cwd":       sess.Cwd,
-			"createdAt": sess.CreatedAt,
-		})
-	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"sessions": out,
-		"total":    len(out),
-	})
-}
-
-func (s *Server) handleProcesses(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	procs := s.procManager.List()
-	out := make([]map[string]interface{}, 0, len(procs))
-	for _, p := range procs {
-		out = append(out, map[string]interface{}{
-			"sessionId": string(p.SessionID),
-			"pid":       p.PID,
-			"state":     p.State,
-			"exitCode":  p.ExitCode,
-			"createdAt": p.CreatedAt,
-		})
-	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"processes": out,
-		"total":     len(out),
 	})
 }
 
