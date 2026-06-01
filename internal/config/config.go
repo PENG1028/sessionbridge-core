@@ -80,9 +80,7 @@ type NodeConfig struct {
 
 // PluginConfig holds plugin-level settings.
 type PluginConfig struct {
-	PluginDirs      []string                              `json:"pluginDirs,omitempty"`
-	DisabledPlugins []string                              `json:"disabledPlugins,omitempty"`
-	Permissions     map[string]map[string]PermissionGrant `json:"permissions,omitempty"`
+	Permissions map[string]map[string]PermissionGrant `json:"permissions,omitempty"`
 }
 
 // PermissionGrant describes how a capability is gated for a plugin.
@@ -131,11 +129,7 @@ func defaultConfig() Config {
 		Node: NodeConfig{
 			Role: "standalone",
 		},
-		Plugin: PluginConfig{
-			PluginDirs: []string{
-				filepath.Join(dataDir, "plugins"),
-			},
-		},
+		Plugin: PluginConfig{},
 	}
 }
 
@@ -367,65 +361,6 @@ func (m *Manager) Get() Config {
 	return m.config // value copy — all fields are value types or nil maps
 }
 
-// PluginGrant returns the permission grant for (pluginID, capability), or nil
-// if no grant is configured.
-func (m *Manager) PluginGrant(pluginID, capability string) *PermissionGrant {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	pm := m.config.Plugin.Permissions
-	if pm == nil {
-		return nil
-	}
-	inner, ok := pm[pluginID]
-	if !ok {
-		return nil
-	}
-	grant, ok := inner[capability]
-	if !ok {
-		return nil
-	}
-	// Return a copy so the caller cannot mutate the live config.
-	g := grant
-	return &g
-}
-
-// SetPermissionGrant sets the permission grant for (pluginID, capability).
-// Unlike dot-notation Set, this handles capability names containing dots.
-func (m *Manager) SetPermissionGrant(pluginID, capability, mode string, constraints map[string]interface{}) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.config.Plugin.Permissions == nil {
-		m.config.Plugin.Permissions = make(map[string]map[string]PermissionGrant)
-	}
-	if m.config.Plugin.Permissions[pluginID] == nil {
-		m.config.Plugin.Permissions[pluginID] = make(map[string]PermissionGrant)
-	}
-	m.config.Plugin.Permissions[pluginID][capability] = PermissionGrant{
-		Mode:        mode,
-		Constraints: constraints,
-	}
-	m.config.Revision++
-	log.Printf("[config] permission grant: %s/%s = %s (rev %d)", pluginID, capability, mode, m.config.Revision)
-	return m.saveLocked()
-}
-
-// RemovePermissionGrant removes a permission grant for (pluginID, capability).
-func (m *Manager) RemovePermissionGrant(pluginID, capability string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.config.Plugin.Permissions != nil {
-		if inner, ok := m.config.Plugin.Permissions[pluginID]; ok {
-			delete(inner, capability)
-			m.config.Revision++
-			log.Printf("[config] permission revoke: %s/%s (rev %d)", pluginID, capability, m.config.Revision)
-			return m.saveLocked()
-		}
-	}
-	return nil
-}
 
 // ---------------------------------------------------------------------------
 // Dot-notation Set

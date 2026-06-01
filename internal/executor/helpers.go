@@ -17,3 +17,8 @@ func decodePayload(payload []byte, target interface{}) error {
 func fmtTimestamp(ts int64) string {
 	return time.UnixMilli(ts).UTC().Format(time.RFC3339)
 }
+
+// nowMillis returns the current Unix timestamp in milliseconds.
+func nowMillis() int64 {
+	return time.Now().UnixMilli()
+}

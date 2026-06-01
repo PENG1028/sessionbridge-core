@@ -287,52 +287,6 @@ func TestSetEmptyKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PluginGrant
-// ---------------------------------------------------------------------------
-
-func TestPluginGrant(t *testing.T) {
-	dir := t.TempDir()
-	mgr := NewManager(filepath.Join(dir, "config.json"))
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	// Set up permissions via Set.
-	if err := mgr.Set("plugin.permissions.p1.fs.mode", "allow"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-	if err := mgr.Set("plugin.permissions.p1.net.mode", "deny"); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	// Existing grant.
-	g := mgr.PluginGrant("p1", "fs")
-	if g == nil {
-		t.Fatal("expected non-nil grant for p1/fs")
-	}
-	if g.Mode != "allow" {
-		t.Errorf("Mode = %q, want %q", g.Mode, "allow")
-	}
-
-	// Existing grant (deny).
-	g = mgr.PluginGrant("p1", "net")
-	if g == nil {
-		t.Fatal("expected non-nil grant for p1/net")
-	}
-	if g.Mode != "deny" {
-		t.Errorf("Mode = %q, want %q", g.Mode, "deny")
-	}
-
-	// Missing plugin.
-	if g := mgr.PluginGrant("unknown", "fs"); g != nil {
-		t.Errorf("expected nil for unknown plugin, got %+v", g)
-	}
-
-	// Missing capability.
-	if g := mgr.PluginGrant("p1", "unknown"); g != nil {
-		t.Errorf("expected nil for unknown capability, got %+v", g)
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Get concurrency / copy safety

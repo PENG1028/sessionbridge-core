@@ -3,14 +3,14 @@ package executor
 import (
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
+	"github.com/user/sessionnode/go-core/internal/capability"
 )
 
 func TestRegisteredCapabilitiesInKnownList(t *testing.T) {
 	r := New(testDeps(t))
 	for cap := range r.handlers {
-		if !pluginmanifest.KnownCapabilities[cap] {
-			t.Errorf("registered capability %q not found in pluginmanifest.KnownCapabilities", cap)
+		if !capability.KnownCapabilities[cap] {
+			t.Errorf("registered capability %q not found in capability.KnownCapabilities", cap)
 		}
 	}
 }

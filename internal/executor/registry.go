@@ -13,7 +13,6 @@ import (
 	"github.com/user/sessionnode/go-core/internal/notify"
 	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/internal/platform"
-	"github.com/user/sessionnode/go-core/internal/pluginmanifest"
 	"github.com/user/sessionnode/go-core/internal/process"
 	"github.com/user/sessionnode/go-core/internal/run"
 	"github.com/user/sessionnode/go-core/internal/session"
@@ -59,15 +58,12 @@ type Deps struct {
 	Config     *config.Manager
 	Nodes      NodeLister
 	History    *history.Store
-	Manifests  ManifestLoader
 	// CapResolver resolves capability support against the current platform.
 	// When nil, capability support checking is skipped (graceful degradation).
 	CapResolver *capability.Resolver
 	// TaskStore tracks long-running operations (install, uninstall, check, etc.).
 	// When nil, task capabilities degrade gracefully (empty list / not-found error).
 	TaskStore *task.Store
-	// Store holds install plans and registered plugin file paths.
-	Store *PlanStore
 	// PlanManager handles approval plan lifecycle (approve, deny) for high-risk operations.
 	// When nil, plan-linked approval is skipped (graceful degradation).
 	PlanManager *plan.Manager
@@ -94,13 +90,6 @@ type Deps struct {
 	Topology TopologyManager
 }
 
-// ManifestLoader provides plugin manifest data to capability handlers.
-// Phase 1: may be nil — handlers degrade gracefully.
-type ManifestLoader interface {
-	LoadManifest(pluginID string) (*pluginmanifest.Manifest, error)
-	ListPlugins() []pluginmanifest.PluginSummary
-	PluginEnabled(pluginID string) bool
-}
 
 // Registry maps capability names to handler functions.
 // Implements the dispatcher.Executor interface.
@@ -257,31 +246,6 @@ func (r *Registry) registerDefaults() {
 
 	r.Register("system.info", systemInfo)
 
-	r.Register("plugin.list", pluginList)
-	r.Register("plugin.info", pluginInfo)
-	r.Register("plugin.get", pluginGet)
-	r.Register("plugin.status", pluginStatus)
-	r.Register("plugin.check", pluginCheck)
-	r.Register("plugin.enable", pluginEnable)
-	r.Register("plugin.disable", pluginDisable)
-	r.Register("plugin.install", pluginInstallPlan)
-	r.Register("plugin.install.plan", pluginInstallPlan)
-	r.Register("plugin.permissions.list", pluginPermissionsList)
-	r.Register("plugin.config.get", pluginConfigGet)
-	r.Register("plugin.config.schema", pluginConfigSchema)
-	r.Register("plugin.history", pluginHistory)
-	r.Register("plugin.cache.list", pluginCacheList)
-	r.Register("plugin.cache.info", pluginCacheInfo)
-	r.Register("plugin.cache.clear", pluginCacheClear)
-	r.Register("plugin.cache.clear.plan", pluginCacheClearPlan)
-	r.Register("plugin.cache.clear.execute", pluginCacheClearExecute)
-	r.Register("plugin.files.list", pluginFilesList)
-	r.Register("plugin.files.register", pluginFilesRegister)
-	r.Register("plugin.install.execute", pluginInstallExecute)
-	r.Register("plugin.uninstall", pluginUninstall)
-	r.Register("plugin.permissions.grant", pluginPermissionsGrant)
-	r.Register("plugin.permissions.revoke", pluginPermissionsRevoke)
-	r.Register("plugin.config.set", pluginConfigSet)
 
 	r.Register("node.list", nodeList)
 	r.Register("node.info", nodeInfo)
