@@ -111,9 +111,6 @@ func main() {
 	// Connection registry (routes process output to WebSocket clients)
 	connRegistry := wsconn.NewRegistry()
 
-	// Process manager (real OS process execution with output push)
-	procManager := process.NewManager(connRegistry.PushChunk, connRegistry.PushSessionEvent)
-
 	// History store — session retention and replay
 	historyStore := history.New("")
 	defer historyStore.Cleanup()
@@ -127,7 +124,7 @@ func main() {
 		}
 		connRegistry.PushSessionEvent(sid, seq, eventType, data)
 	}
-	procManager = process.NewManager(wrappedPush, wrappedEvent)
+	procManager := process.NewManager(wrappedPush, wrappedEvent)
 	procManager.SetOnSpawn(func(sid types.SessionID) {
 		historyStore.InitSession(sid, types.DefaultHistoryPolicy())
 	})

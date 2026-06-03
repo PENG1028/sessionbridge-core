@@ -56,7 +56,7 @@ type SpawnConfig struct {
 
 // Manager spawns and tracks OS processes, pushing their output via callbacks.
 type Manager struct {
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	processes map[types.SessionID]*Process
 	pusher    PushFunc
 	eventer   EventFunc
@@ -122,7 +122,6 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 
 	// Resolve tree metadata.
 	parentSID := types.SessionID("")
-	rootSID := types.SessionID("")
 	pluginID := types.PluginID("")
 	kind := ""
 	if cfg != nil {
@@ -130,20 +129,10 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 		pluginID = cfg.PluginID
 		kind = cfg.Kind
 	}
-	if parentSID != "" {
-		if parent := m.processes[parentSID]; parent != nil {
-			if parent.RootSessionID != "" {
-				rootSID = parent.RootSessionID
-			} else {
-				rootSID = parentSID
-			}
-		}
-	}
-
 	proc := &Process{
 		SessionID:       sid,
 		ParentSessionID: parentSID,
-		RootSessionID:   rootSID,
+		RootSessionID:   "",
 		PluginID:        pluginID,
 		Kind:            kind,
 		Cmd:             cmd,
@@ -154,6 +143,15 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 	}
 
 	m.mu.Lock()
+	if parentSID != "" {
+		if parent := m.processes[parentSID]; parent != nil {
+			if parent.RootSessionID != "" {
+				proc.RootSessionID = parent.RootSessionID
+			} else {
+				proc.RootSessionID = parentSID
+			}
+		}
+	}
 	m.processes[sid] = proc
 	m.mu.Unlock()
 
@@ -219,8 +217,8 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 
 // Get returns the process for the given session ID, or nil.
 func (m *Manager) Get(sid types.SessionID) *Process {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.processes[sid]
 }
 

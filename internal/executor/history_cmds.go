@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/user/sessionnode/go-core/internal/history"
-	"github.com/user/sessionnode/go-core/internal/plan"
 	"github.com/user/sessionnode/go-core/pkg/types"
 )
 
@@ -300,6 +299,3 @@ func eventToMap(evt types.HistoryEvent) map[string]interface{} {
 	}
 	return m
 }
-
-// Ensure unused import is used
-var _ = plan.NewPlanStore

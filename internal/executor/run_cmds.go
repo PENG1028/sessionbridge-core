@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"time"
 
 	"github.com/user/sessionnode/go-core/internal/history"
 	"github.com/user/sessionnode/go-core/internal/process"
@@ -582,4 +581,3 @@ func defaultWindowsShell() string {
 	return "cmd.exe"
 }
 
-var _ = time.Now

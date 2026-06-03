@@ -309,7 +309,7 @@ func (m *Manager) saveLocked() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(m.path, data, 0644); err != nil {
+	if err := os.WriteFile(m.path, data, 0600); err != nil {
 		return fmt.Errorf("write config %s: %w", m.path, err)
 	}
 	return nil
