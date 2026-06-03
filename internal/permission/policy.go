@@ -17,8 +17,8 @@ type MemPolicyStore struct {
 }
 
 type policyKey struct {
-	pluginID    types.PluginID
-	capability  string
+	pluginID   types.PluginID
+	capability string
 }
 
 // NewMemPolicyStore creates an empty policy store.

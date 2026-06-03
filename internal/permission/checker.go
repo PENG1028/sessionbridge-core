@@ -9,7 +9,7 @@ import (
 
 // PermissionGrant is the effective runtime grant for a capability.
 type PermissionGrant struct {
-	Mode        string                       `json:"mode"`     // "allow" | "deny" | "ask"
+	Mode        string                       `json:"mode"` // "allow" | "deny" | "ask"
 	Constraints *types.PermissionConstraints `json:"constraints,omitempty"`
 	GrantedAt   int64                        `json:"grantedAt"`
 	GrantedBy   string                       `json:"grantedBy"`

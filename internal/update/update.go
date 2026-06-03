@@ -91,24 +91,24 @@ func ValidatePolicy(p UpdatePolicy) string {
 type StatusValue string
 
 const (
-	StatusUnknown        StatusValue = "unknown"
-	StatusChecking       StatusValue = "checking"
-	StatusUpToDate       StatusValue = "up-to-date"
-	StatusUpdateAvail    StatusValue = "update-available"
-	StatusError          StatusValue = "error"
+	StatusUnknown     StatusValue = "unknown"
+	StatusChecking    StatusValue = "checking"
+	StatusUpToDate    StatusValue = "up-to-date"
+	StatusUpdateAvail StatusValue = "update-available"
+	StatusError       StatusValue = "error"
 )
 
 // UpdateStatus is the current snapshot of update state.
 type UpdateStatus struct {
-	Status         StatusValue  `json:"status"`
-	CurrentCommit  string       `json:"currentCommit"`
-	RemoteCommit   string       `json:"remoteCommit"`
-	BehindBy       int          `json:"behindBy"`
-	Dirty          bool         `json:"dirty"`
-	Source         UpdateSource `json:"source"`
-	LastCheckedAt  int64        `json:"lastCheckedAt"`
-	LastCheckError string       `json:"lastCheckError,omitempty"`
-	RequiresRestart bool        `json:"requiresRestart"`
+	Status          StatusValue  `json:"status"`
+	CurrentCommit   string       `json:"currentCommit"`
+	RemoteCommit    string       `json:"remoteCommit"`
+	BehindBy        int          `json:"behindBy"`
+	Dirty           bool         `json:"dirty"`
+	Source          UpdateSource `json:"source"`
+	LastCheckedAt   int64        `json:"lastCheckedAt"`
+	LastCheckError  string       `json:"lastCheckError,omitempty"`
+	RequiresRestart bool         `json:"requiresRestart"`
 }
 
 // DefaultStatus returns an empty status.

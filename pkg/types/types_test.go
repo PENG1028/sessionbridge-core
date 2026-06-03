@@ -168,14 +168,14 @@ func TestDeclaredLocation_JSON(t *testing.T) {
 
 func TestPlannedArtifact_JSON(t *testing.T) {
 	roundTrip(t, PlannedArtifact{
-		Source:      SourceInstallPlan,
-		InstallID:   "inst_001",
-		PluginID:    "claude-code",
-		NodeID:      "node_local",
-		Path:        "~/.sessionnode/downloads/inst_001/node-vxx.msi",
-		FileType:    FileTypeBinary,
-		Clearable:   true,
-		Removable:   true,
+		Source:    SourceInstallPlan,
+		InstallID: "inst_001",
+		PluginID:  "claude-code",
+		NodeID:    "node_local",
+		Path:      "~/.sessionnode/downloads/inst_001/node-vxx.msi",
+		FileType:  FileTypeBinary,
+		Clearable: true,
+		Removable: true,
 	})
 }
 

@@ -5,20 +5,20 @@ package capability
 // The executor registers its IMPLEMENTED subset via Registry.registerDefaults().
 var KnownCapabilities = map[string]bool{
 	// Node
-	"node.list":              true,
-	"node.info":              true,
-	"node.health":            true,
-	"node.disconnect":        true,
-	"node.identity.get":      true,
-	"node.invite.create":     true,
-	"node.invite.list":       true,
-	"node.invite.revoke":     true,
-	"node.invite.accept":     true,
-	"node.peer.list":         true,
-	"node.peer.info":         true,
-	"node.peer.reconnect":    true,
-	"node.peer.disconnect":   true,
-	"node.peer.revoke":       true,
+	"node.list":               true,
+	"node.info":               true,
+	"node.health":             true,
+	"node.disconnect":         true,
+	"node.identity.get":       true,
+	"node.invite.create":      true,
+	"node.invite.list":        true,
+	"node.invite.revoke":      true,
+	"node.invite.accept":      true,
+	"node.peer.list":          true,
+	"node.peer.info":          true,
+	"node.peer.reconnect":     true,
+	"node.peer.disconnect":    true,
+	"node.peer.revoke":        true,
 	"node.reachability.check": true,
 
 	// Session
@@ -69,9 +69,9 @@ var KnownCapabilities = map[string]bool{
 	"env.unset":       true,
 
 	// Config
-	"config.get":  true,
-	"config.set":  true,
-	"config.list": true,
+	"config.get":   true,
+	"config.set":   true,
+	"config.list":  true,
 	"config.reset": true,
 
 	// Logs
@@ -123,11 +123,11 @@ var KnownCapabilities = map[string]bool{
 // DangerousCapabilities are capabilities that must NOT have default: allow
 // unless the plugin is trusted AND allowDangerousDefaults is explicitly set.
 var DangerousCapabilities = map[string]bool{
-	"process.spawn":  true,
-	"stream.write":   true,
-	"fs.write":       true,
-	"fs.remove":      true,
-	"config.set":     true,
+	"process.spawn":   true,
+	"stream.write":    true,
+	"fs.write":        true,
+	"fs.remove":       true,
+	"config.set":      true,
 	"node.disconnect": true,
 	"network.connect": true,
 	"network.listen":  true,

@@ -433,8 +433,8 @@ func TestLoadOrCreateIdentity_Validation_KeyPairMismatch(t *testing.T) {
 
 	bad := NodeIdentity{
 		NodeID:      ni.NodeID,
-		PublicKey:   wrongPub,       // wrong public key
-		PrivateKey:  ni.PrivateKey,  // original private key
+		PublicKey:   wrongPub,      // wrong public key
+		PrivateKey:  ni.PrivateKey, // original private key
 		Fingerprint: ni.Fingerprint,
 		CreatedAt:   ni.CreatedAt,
 	}

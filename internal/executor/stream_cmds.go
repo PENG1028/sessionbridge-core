@@ -8,10 +8,10 @@ import (
 )
 
 type streamSubscribePayload struct {
-	SessionID  string          `json:"sessionId"`
-	Stream     string          `json:"stream"`     // legacy
-	StreamType string          `json:"streamType"` // canonical — prefer over "stream"
-	FromSeq    types.EventSeq  `json:"fromSeq,omitempty"`
+	SessionID  string         `json:"sessionId"`
+	Stream     string         `json:"stream"`     // legacy
+	StreamType string         `json:"streamType"` // canonical — prefer over "stream"
+	FromSeq    types.EventSeq `json:"fromSeq,omitempty"`
 }
 
 func streamSubscribe(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {

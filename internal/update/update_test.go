@@ -7,17 +7,17 @@ import (
 
 // fakeGitRunner records calls and returns configured values.
 type fakeGitRunner struct {
-	headCommit   string
-	remoteHead   string
-	dirty        bool
+	headCommit string
+	remoteHead string
+	dirty      bool
 
 	headCommitErr error
 	remoteHeadErr error
 	dirtyErr      error
 
-	headCommitCalls   int
-	remoteHeadCalls   int
-	dirtyCalls        int
+	headCommitCalls int
+	remoteHeadCalls int
+	dirtyCalls      int
 }
 
 func (f *fakeGitRunner) HeadCommit() (string, error) {

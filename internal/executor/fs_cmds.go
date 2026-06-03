@@ -48,7 +48,7 @@ func fsWrite(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		return nil, fmt.Errorf("write error: %w", err)
 	}
 	return map[string]interface{}{
-		"path":   p.Path,
+		"path":    p.Path,
 		"written": len(p.Data),
 	}, nil
 }

@@ -115,9 +115,9 @@ type PeerTopology struct {
 	cancelFuncs map[types.NodeID]context.CancelFunc
 	cancelMu    sync.Mutex
 
-	mu          sync.RWMutex
-	log         *log.Logger
-	authToken   string // for authenticating forwarded node-to-node requests
+	mu        sync.RWMutex
+	log       *log.Logger
+	authToken string // for authenticating forwarded node-to-node requests
 
 	// Inbound write channels — peers that connected to us via /peer/ws.
 	// Used by forward() when no outbound connection exists.
@@ -129,9 +129,9 @@ type PeerTopology struct {
 // with the "local" tag. Configured peers are registered in disconnected state.
 func New(cfg Config) *PeerTopology {
 	pt := &PeerTopology{
-		localID:     cfg.LocalID,
-		localName:   cfg.LocalName,
-		identity:    cfg.Identity,
+		localID:        cfg.LocalID,
+		localName:      cfg.LocalName,
+		identity:       cfg.Identity,
 		peers:          make(map[types.NodeID]*Peer),
 		pending:        make(map[types.RequestID]chan *types.CapabilityResponse),
 		cancelFuncs:    make(map[types.NodeID]context.CancelFunc),

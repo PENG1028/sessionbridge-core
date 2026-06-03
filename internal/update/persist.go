@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 )
 
-func (m *Manager) sourcePath() string   { return filepath.Join(m.dataDir, "update-source.json") }
-func (m *Manager) policyPath() string   { return filepath.Join(m.dataDir, "update-policy.json") }
-func (m *Manager) statusPath() string   { return filepath.Join(m.dataDir, "update-status.json") }
+func (m *Manager) sourcePath() string { return filepath.Join(m.dataDir, "update-source.json") }
+func (m *Manager) policyPath() string { return filepath.Join(m.dataDir, "update-policy.json") }
+func (m *Manager) statusPath() string { return filepath.Join(m.dataDir, "update-status.json") }
 
 // persistJSON writes v to path atomically (tmp + rename).
 func persistJSON(path string, v interface{}) error {

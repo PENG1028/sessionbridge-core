@@ -973,7 +973,7 @@ func TestTerminalPluginE2E(t *testing.T) {
 		RequestID:  "req_replay2",
 		Capability: "stream.replay",
 		Payload:    json.RawMessage(`{"sessionId":"` + sid2 + `","streamType":"stdout"}`),
-		}, "req_replay2")
+	}, "req_replay2")
 	if !replay2Resp.OK {
 		t.Fatalf("stream.replay failed: %v", replay2Resp.Error)
 	}
@@ -1199,6 +1199,7 @@ func TestWSActorTypeNodeBlockedOnControlWS(t *testing.T) {
 		t.Fatal("expected failure when client claims actorType=node on /ws")
 	}
 }
+
 // ---------------------------------------------------------------------------
 
 // testServerWithRunStore creates a server wired with RunStore, History, and
@@ -1547,11 +1548,15 @@ func TestTerminalReconnectE2E(t *testing.T) {
 }
 
 func errCode(e *types.CoreError) string {
-	if e == nil { return "<nil>" }
+	if e == nil {
+		return "<nil>"
+	}
 	return e.Code
 }
 
 func errMsg(e *types.CoreError) string {
-	if e == nil { return "<nil>" }
+	if e == nil {
+		return "<nil>"
+	}
 	return e.Message
 }

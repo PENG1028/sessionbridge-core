@@ -2,10 +2,10 @@ package types
 
 // HistoryMode constants.
 const (
-	HistoryModeDisabled    = "disabled"
-	HistoryModeMemory      = "memory"
-	HistoryModeDisk        = "disk"
-	HistoryModeEncrypted   = "encrypted-disk"
+	HistoryModeDisabled  = "disabled"
+	HistoryModeMemory    = "memory"
+	HistoryModeDisk      = "disk"
+	HistoryModeEncrypted = "encrypted-disk"
 )
 
 // HistoryRedaction constants.
@@ -17,9 +17,9 @@ const (
 
 // HistoryVisibility constants.
 const (
-	HistoryVisSameActor    = "same-actor"
-	HistoryVisSamePlugin   = "same-plugin"
-	HistoryVisAuthorized      = "authorized"
+	HistoryVisSameActor  = "same-actor"
+	HistoryVisSamePlugin = "same-plugin"
+	HistoryVisAuthorized = "authorized"
 )
 
 // DefaultHistoryPolicy returns a safe default policy.
@@ -33,13 +33,13 @@ const (
 // - Authorized visibility
 func DefaultHistoryPolicy() HistoryPolicy {
 	return HistoryPolicy{
-		Enabled:    true,
-		Mode:       HistoryModeMemory,
-		Streams:    []string{"stdout", "stderr"},
-		MaxBytes:   100 * 1024 * 1024, // 100 MB
-		MaxAge:     "24h",
-		Redaction:  HistoryRedactionNone,
-		Visibility: HistoryVisAuthorized,
+		Enabled:     true,
+		Mode:        HistoryModeMemory,
+		Streams:     []string{"stdout", "stderr"},
+		MaxBytes:    100 * 1024 * 1024, // 100 MB
+		MaxAge:      "24h",
+		Redaction:   HistoryRedactionNone,
+		Visibility:  HistoryVisAuthorized,
 		ClearOnStop: false,
 	}
 }
@@ -61,7 +61,7 @@ type HistoryPolicy struct {
 // HistoryEvent is a single recorded event in session history.
 type HistoryEvent struct {
 	EventSeq  EventSeq `json:"eventSeq"`
-	Type      string   `json:"type"`      // "session.created", "stream.stdout", "stream.stderr", "session.stopped", etc.
+	Type      string   `json:"type"` // "session.created", "stream.stdout", "stream.stderr", "session.stopped", etc.
 	Stream    string   `json:"stream,omitempty"`
 	Data      string   `json:"data,omitempty"`
 	Timestamp int64    `json:"timestamp"`

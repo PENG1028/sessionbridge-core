@@ -5,8 +5,8 @@ package types
 
 type NodeID string
 
-func (id NodeID) Valid() bool     { return id != "" }
-func (id NodeID) String() string  { return string(id) }
+func (id NodeID) Valid() bool    { return id != "" }
+func (id NodeID) String() string { return string(id) }
 
 type SessionID string
 

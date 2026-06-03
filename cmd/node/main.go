@@ -173,11 +173,11 @@ func main() {
 	go topo.Start(topoCtx)
 	defer topoCancel()
 
-		// Build capability map from the core capabilities.
-		permCaps := make(map[types.PluginID][]string)
-		for pidStr, list := range permission.AllPluginsCaps {
-			permCaps[types.PluginID(pidStr)] = list
-		}
+	// Build capability map from the core capabilities.
+	permCaps := make(map[types.PluginID][]string)
+	for pidStr, list := range permission.AllPluginsCaps {
+		permCaps[types.PluginID(pidStr)] = list
+	}
 	permChecker := permission.NewChecker(
 		permission.NewMapRegistry(permCaps),
 		permission.NewAllowAllPolicy(permCaps),
@@ -187,7 +187,7 @@ func main() {
 	authenticator := auth.NewTokenAuthenticator(token)
 
 	// Plugin registry for the dispatcher — built from manifest discovery + core.
-		dispPlugins := NewDispPluginRegistry()
+	dispPlugins := NewDispPluginRegistry()
 
 	// Run store — long-lived resource index
 	runStore := run.NewStore()
@@ -298,12 +298,6 @@ func validatePublicAccess(addr, token string) {
 	if isPublicAddr(addr) {
 		log.Fatalf("FATAL: LISTEN_ADDR=%s with empty SESSIONNODE_TOKEN is not allowed. Set SESSIONNODE_TOKEN or SESSIONNODE_ALLOW_INSECURE=1", addr)
 	}
-}
-
-// fileExists returns true if the given path exists and is a directory.
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 // --- Simple implementations ---

@@ -228,10 +228,10 @@ func TestSession_TransitionResumableToRunning(t *testing.T) {
 
 func TestSession_InvalidTransition(t *testing.T) {
 	tests := []struct {
-		name     string
-		from     string
-		to       string
-		setup    func(*Session)
+		name  string
+		from  string
+		to    string
+		setup func(*Session)
 	}{
 		{"created to exited", StateCreated, StateExited, nil},
 		{"created to interrupted", StateCreated, StateInterrupted, nil},

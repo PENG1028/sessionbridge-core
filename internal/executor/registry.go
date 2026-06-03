@@ -90,7 +90,6 @@ type Deps struct {
 	Topology TopologyManager
 }
 
-
 // Registry maps capability names to handler functions.
 // Implements the dispatcher.Executor interface.
 type Registry struct {
@@ -246,7 +245,6 @@ func (r *Registry) registerDefaults() {
 
 	r.Register("system.info", systemInfo)
 
-
 	r.Register("node.list", nodeList)
 	r.Register("node.info", nodeInfo)
 	r.Register("node.health", nodeHealth)
@@ -272,15 +270,15 @@ func (r *Registry) registerDefaults() {
 	r.Register("session.history.list", historyList)
 	r.Register("session.history.clear.plan", historyClearPlan)
 	r.Register("session.history.clear.execute", historyClearExecute)
-		r.Register("stream.replay", streamReplay)
-		r.Register("stream.tail", streamTail)
+	r.Register("stream.replay", streamReplay)
+	r.Register("stream.tail", streamTail)
 
-		r.Register("logs.tail", logsTail)
-		r.Register("logs.query", logsQuery)
-		r.Register("audit.list", auditList)
+	r.Register("logs.tail", logsTail)
+	r.Register("logs.query", logsQuery)
+	r.Register("audit.list", auditList)
 
-		r.Register("task.list", taskList)
-		r.Register("task.info", taskInfo)
+	r.Register("task.list", taskList)
+	r.Register("task.info", taskInfo)
 
 	r.Register("run.create", runCreate)
 	r.Register("run.list", runList)

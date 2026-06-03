@@ -112,8 +112,8 @@ func notifyRespond(req *types.CapabilityRequest, deps *Deps) (interface{}, error
 	}
 
 	return map[string]interface{}{
-		"requestId":  string(resp.RequestID),
-		"action":     resp.Action,
-		"status":     "responded",
+		"requestId": string(resp.RequestID),
+		"action":    resp.Action,
+		"status":    "responded",
 	}, nil
 }

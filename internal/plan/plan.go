@@ -8,12 +8,12 @@ import (
 
 // Plan state constants.
 const (
-	StatePending  = "pending"   // plan created, awaiting approval
-	StateApproved = "approved"  // approved by authorized actor
-	StateDenied   = "denied"    // explicitly denied
-	StateExecuted = "executed"  // plan was executed
-	StateExpired  = "expired"   // ttl passed before approval
-	StateFailed   = "failed"    // execution failed
+	StatePending  = "pending"  // plan created, awaiting approval
+	StateApproved = "approved" // approved by authorized actor
+	StateDenied   = "denied"   // explicitly denied
+	StateExecuted = "executed" // plan was executed
+	StateExpired  = "expired"  // ttl passed before approval
+	StateFailed   = "failed"   // execution failed
 )
 
 // validTransitions for plan state machine.

@@ -22,7 +22,7 @@ import (
 type NodeIdentity struct {
 	NodeID      string `json:"nodeId"`
 	PublicKey   []byte `json:"publicKey"`
-	PrivateKey  []byte `json:"privateKey"` // ed25519 private key (64 bytes), persisted to identity.json
+	PrivateKey  []byte `json:"privateKey"`  // ed25519 private key (64 bytes), persisted to identity.json
 	Fingerprint string `json:"fingerprint"` // hex SHA-256 of public key
 	CreatedAt   int64  `json:"createdAt"`   // unix millis
 }

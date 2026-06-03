@@ -26,7 +26,7 @@ type Subscription struct {
 	ID          string
 	ConnID      string
 	SessionID   types.SessionID
-	StreamTypes []string        // ["stdout"], ["stderr"], or ["stdout", "stderr"]
+	StreamTypes []string // ["stdout"], ["stderr"], or ["stdout", "stderr"]
 	PluginID    types.PluginID
 	Actor       types.Actor
 	FromSeq     types.EventSeq
@@ -44,7 +44,7 @@ type Subscription struct {
 type Registry struct {
 	mu     sync.RWMutex
 	conns  map[string]*Connection
-	subs   map[string]*Subscription                    // subId → sub
+	subs   map[string]*Subscription                     // subId → sub
 	bySess map[types.SessionID]map[string]*Subscription // sessionId → subId → sub
 	byConn map[string]map[string]*Subscription          // connId → subId → sub
 	connID atomic.Int64

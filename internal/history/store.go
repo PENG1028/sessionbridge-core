@@ -23,15 +23,15 @@ var truncationMarker = types.HistoryEvent{
 
 // sessionHistory holds all retained events for a single session.
 type sessionHistory struct {
-	mu      sync.RWMutex
-	policy  types.HistoryPolicy
-	events  []types.HistoryEvent
-	bytes   int64 // total bytes of event data stored
-	dropped int64 // bytes dropped due to maxBytes
+	mu        sync.RWMutex
+	policy    types.HistoryPolicy
+	events    []types.HistoryEvent
+	bytes     int64 // total bytes of event data stored
+	dropped   int64 // bytes dropped due to maxBytes
 	truncated bool
-	fromSeq types.EventSeq
-	nextSeq types.EventSeq
-	dir     string // on-disk directory; empty = memory mode
+	fromSeq   types.EventSeq
+	nextSeq   types.EventSeq
+	dir       string // on-disk directory; empty = memory mode
 
 	// file handles for disk mode (lazily opened)
 	stdoutFile *os.File
@@ -443,8 +443,8 @@ func (s *Store) truncateLocked(sh *sessionHistory, newDataLen int64) {
 		sh.fromSeq = sh.nextSeq
 		sh.events = append(sh.events, truncationMarker)
 		sh.events = append(sh.events, types.HistoryEvent{
-			EventSeq: sh.nextSeq,
-			Type:     "history.continued",
+			EventSeq:  sh.nextSeq,
+			Type:      "history.continued",
 			Timestamp: time.Now().UnixMilli(),
 		})
 		sh.nextSeq++
@@ -536,8 +536,8 @@ type HistoryError struct {
 	message string
 }
 
-func (e *HistoryError) Error() string  { return e.message }
-func (e *HistoryError) Code() string    { return e.code }
+func (e *HistoryError) Error() string { return e.message }
+func (e *HistoryError) Code() string  { return e.code }
 
 type RangeTruncatedError struct {
 	FromSeq types.EventSeq

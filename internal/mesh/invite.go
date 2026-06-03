@@ -12,12 +12,12 @@ import (
 // Invite represents a one-time invite code for peer pairing.
 type Invite struct {
 	InviteID             string `json:"inviteId"`
-	Code                 string `json:"code"`                  // short-lived one-time code, returned only on create
-	CodeHash             string `json:"-"`                     // sha256(code), never returned
+	Code                 string `json:"code"` // short-lived one-time code, returned only on create
+	CodeHash             string `json:"-"`    // sha256(code), never returned
 	CreatedAt            int64  `json:"createdAt"`
 	ExpiresAt            int64  `json:"expiresAt"`
 	TTLSeconds           int    `json:"ttlSeconds"`
-	TrustDurationSeconds int64  `json:"trustDurationSeconds"`  // 0 = permanent
+	TrustDurationSeconds int64  `json:"trustDurationSeconds"` // 0 = permanent
 	LocalNodeID          string `json:"localNodeId"`
 	LocalFingerprint     string `json:"localFingerprint"`
 	LocalPublicKey       []byte `json:"localPublicKey"`

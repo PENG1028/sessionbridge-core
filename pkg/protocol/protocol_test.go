@@ -245,7 +245,7 @@ func createTestCapabilityRequest() *types.CapabilityRequest {
 		Capability:   "session.create",
 		TargetNodeID: "",
 		Payload:      payload,
-					Actor: types.Actor{Type: "web", ID: "browser_abc"},
+		Actor:        types.Actor{Type: "web", ID: "browser_abc"},
 		Timestamp:    1712345678000,
 	}
 }
@@ -256,7 +256,7 @@ func createTestCapabilityRequestWithPayload(payload json.RawMessage) *types.Capa
 		PluginID:   "file-explorer",
 		Capability: "fs.list",
 		Payload:    payload,
-					Actor: types.Actor{Type: "cli", ID: "user_zhp"},
+		Actor:      types.Actor{Type: "cli", ID: "user_zhp"},
 		Timestamp:  1712345678000,
 	}
 }

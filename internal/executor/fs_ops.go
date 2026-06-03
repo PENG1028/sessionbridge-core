@@ -40,8 +40,8 @@ func fsMkdir(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 }
 
 type fsRemovePayload struct {
-	Path  string `json:"path"`
-	Recursive bool `json:"recursive,omitempty"` // like rm -rf
+	Path      string `json:"path"`
+	Recursive bool   `json:"recursive,omitempty"` // like rm -rf
 }
 
 func fsRemove(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {

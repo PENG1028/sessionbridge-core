@@ -17,9 +17,9 @@ func TestStore_InitSession_MemoryMode(t *testing.T) {
 	sid := types.SessionID("sess_test_mem")
 
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeMemory,
-		Streams: []string{"stdout", "stderr"},
+		Enabled:  true,
+		Mode:     types.HistoryModeMemory,
+		Streams:  []string{"stdout", "stderr"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -65,9 +65,9 @@ func TestStore_InitSession_DiskMode(t *testing.T) {
 	sid := types.SessionID("sess_disk_init")
 
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -841,9 +841,9 @@ func TestStore_DiskMode_RecordAndReplay(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_rr")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout", "stderr"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout", "stderr"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -898,9 +898,9 @@ func TestStore_DiskMode_ReplayFromDisk(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_rebuild")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -945,9 +945,9 @@ func TestStore_DiskMode_ReplayFromDisk_NoEventsFile(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_no_file")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -990,9 +990,9 @@ func TestStore_DiskMode_ClearRemovesFiles(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_clear")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -1020,9 +1020,9 @@ func TestStore_DiskMode_RemoveSessionRemovesFiles(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_remove")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -1047,9 +1047,9 @@ func TestStore_DiskMode_NoStderrFileWhenNoStderr(t *testing.T) {
 	s := New(dir)
 	sid := types.SessionID("sess_disk_noerr")
 	policy := types.HistoryPolicy{
-		Enabled: true,
-		Mode:    types.HistoryModeDisk,
-		Streams: []string{"stdout"},
+		Enabled:  true,
+		Mode:     types.HistoryModeDisk,
+		Streams:  []string{"stdout"},
 		MaxBytes: 1 << 20,
 	}
 
@@ -1064,7 +1064,7 @@ func TestStore_DiskMode_NoStderrFileWhenNoStderr(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(sessionDir, "stderr.log")); !os.IsNotExist(err) {
 		t.Error("stderr.log should not exist when no stderr events recorded")
 	}
-        s.Cleanup()
+	s.Cleanup()
 }
 
 // ---------------------------------------------------------------------------

@@ -42,8 +42,8 @@ type _INPUT_RECORD struct {
 }
 
 const (
-	_SW_HIDE = 0
-	_KEY_EVENT = 0x0001
+	_SW_HIDE            = 0
+	_KEY_EVENT          = 0x0001
 	_CREATE_NEW_CONSOLE = 0x00000010
 )
 
@@ -53,22 +53,22 @@ var (
 	modKernel32Console = syscall.NewLazyDLL("kernel32.dll")
 	modUser32Console   = syscall.NewLazyDLL("user32.dll")
 
-	procFreeConsoleConsole       = modKernel32Console.NewProc("FreeConsole")
-	procAttachConsoleConsole     = modKernel32Console.NewProc("AttachConsole")
-	procGetConsoleWindowConsole  = modKernel32Console.NewProc("GetConsoleWindow")
-	procShowWindowConsole        = modUser32Console.NewProc("ShowWindow")
-	procSetWindowPosConsole      = modUser32Console.NewProc("SetWindowPos")
+	procFreeConsoleConsole                = modKernel32Console.NewProc("FreeConsole")
+	procAttachConsoleConsole              = modKernel32Console.NewProc("AttachConsole")
+	procGetConsoleWindowConsole           = modKernel32Console.NewProc("GetConsoleWindow")
+	procShowWindowConsole                 = modUser32Console.NewProc("ShowWindow")
+	procSetWindowPosConsole               = modUser32Console.NewProc("SetWindowPos")
 	procGetConsoleScreenBufferInfoConsole = modKernel32Console.NewProc("GetConsoleScreenBufferInfo")
-	procReadConsoleOutputConsole         = modKernel32Console.NewProc("ReadConsoleOutputW")
-	procWriteConsoleInputConsole         = modKernel32Console.NewProc("WriteConsoleInputW")
+	procReadConsoleOutputConsole          = modKernel32Console.NewProc("ReadConsoleOutputW")
+	procWriteConsoleInputConsole          = modKernel32Console.NewProc("WriteConsoleInputW")
 	procSetConsoleScreenBufferSizeConsole = modKernel32Console.NewProc("SetConsoleScreenBufferSize")
-	procSetConsoleWindowInfoConsole      = modKernel32Console.NewProc("SetConsoleWindowInfo")
-	procWaitForSingleObjectConsole       = modKernel32Console.NewProc("WaitForSingleObject")
-	procCloseHandleConsole               = modKernel32Console.NewProc("CloseHandle")
-	procTerminateProcessConsole          = modKernel32Console.NewProc("TerminateProcess")
-	procGetExitCodeProcessConsole        = modKernel32Console.NewProc("GetExitCodeProcess")
-	procCreateProcessWConsole            = modKernel32Console.NewProc("CreateProcessW")
-	procResumeThreadConsole              = modKernel32Console.NewProc("ResumeThread")
+	procSetConsoleWindowInfoConsole       = modKernel32Console.NewProc("SetConsoleWindowInfo")
+	procWaitForSingleObjectConsole        = modKernel32Console.NewProc("WaitForSingleObject")
+	procCloseHandleConsole                = modKernel32Console.NewProc("CloseHandle")
+	procTerminateProcessConsole           = modKernel32Console.NewProc("TerminateProcess")
+	procGetExitCodeProcessConsole         = modKernel32Console.NewProc("GetExitCodeProcess")
+	procCreateProcessWConsole             = modKernel32Console.NewProc("CreateProcessW")
+	procResumeThreadConsole               = modKernel32Console.NewProc("ResumeThread")
 )
 
 // ── consoleDriver ─────────────────────────────────────────────────

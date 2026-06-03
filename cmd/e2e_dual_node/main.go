@@ -14,9 +14,9 @@ import (
 )
 
 type testCase struct {
-	name     string
-	send     *protocol.Message
-	check    func(*protocol.Message) error
+	name  string
+	send  *protocol.Message
+	check func(*protocol.Message) error
 }
 
 var nodeLocal = os.Getenv("NODE_LOCAL_ADDR")

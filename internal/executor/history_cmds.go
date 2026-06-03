@@ -72,7 +72,7 @@ func historyStats(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 
 func historySetPolicy(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	var p struct {
-		SessionID string             `json:"sessionId"`
+		SessionID string              `json:"sessionId"`
 		History   types.HistoryPolicy `json:"history"`
 	}
 	if err := decodePayload(req.Payload, &p); err != nil {
@@ -124,11 +124,11 @@ func historyClearPlan(req *types.CapabilityRequest, deps *Deps) (interface{}, er
 	}
 
 	return map[string]interface{}{
-		"sessionId":          string(p.SessionID),
-		"action":             "session.history.clear",
-		"willDeleteStreams":  p.Streams,
+		"sessionId":           string(p.SessionID),
+		"action":              "session.history.clear",
+		"willDeleteStreams":   p.Streams,
 		"estimatedBytesFreed": stats.BytesStored,
-		"risk":               "medium",
+		"risk":                "medium",
 	}, nil
 }
 
@@ -164,9 +164,9 @@ func historyClearExecute(req *types.CapabilityRequest, deps *Deps) (interface{},
 	}
 
 	return map[string]interface{}{
-		"sessionId":   p.SessionID,
-		"bytesFreed":  bytesFreed,
-		"clearedAt":   time.Now().UnixMilli(),
+		"sessionId":  p.SessionID,
+		"bytesFreed": bytesFreed,
+		"clearedAt":  time.Now().UnixMilli(),
 	}, nil
 }
 

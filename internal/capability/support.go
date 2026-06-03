@@ -112,7 +112,7 @@ var Matrix = map[string]map[string]platformRule{
 	"run.updatePolicy": desktopFull,
 	"run.attach":       desktopFull,
 
-		// ── update family ──
+	// ── update family ──
 	"update.status":     desktopFull,
 	"update.source.get": desktopFull,
 	"update.source.set": desktopFull,
@@ -123,9 +123,9 @@ var Matrix = map[string]map[string]platformRule{
 	"update.ignore":     desktopFull,
 
 	// ── logs & audit family ──
-		"logs.tail":  desktopFull,
-		"logs.query": desktopFull,
-		"audit.list": desktopFull,
+	"logs.tail":  desktopFull,
+	"logs.query": desktopFull,
+	"audit.list": desktopFull,
 	// ── system family ──
 	"system.info":  desktopFull,
 	"node.info":    desktopFull,

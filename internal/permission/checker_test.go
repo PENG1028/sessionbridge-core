@@ -400,7 +400,7 @@ func TestCheck_TargetNodeAnyWhenScopeEmpty(t *testing.T) {
 	}, map[string]map[string]*PermissionGrant{
 		"test-plugin": {
 			"fs.read": {
-				Mode: "allow",
+				Mode:        "allow",
 				Constraints: &types.PermissionConstraints{
 					// No TargetNodes = all nodes allowed
 				},

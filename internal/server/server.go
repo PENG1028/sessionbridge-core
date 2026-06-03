@@ -876,16 +876,3 @@ func actionResponseToMessage(reqMsg *protocol.Message, resp *types.CapabilityRes
 	}
 	return out
 }
-
-// extractSessionID attempts to parse a "sessionId" field from a JSON payload.
-func extractSessionID(payload json.RawMessage) types.SessionID {
-	var m map[string]interface{}
-	if err := json.Unmarshal(payload, &m); err != nil {
-		return ""
-	}
-	sid, ok := m["sessionId"].(string)
-	if !ok || sid == "" {
-		return ""
-	}
-	return types.SessionID(sid)
-}

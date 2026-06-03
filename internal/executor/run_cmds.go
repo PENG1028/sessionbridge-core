@@ -580,4 +580,3 @@ func defaultWindowsShell() string {
 	}
 	return "cmd.exe"
 }
-

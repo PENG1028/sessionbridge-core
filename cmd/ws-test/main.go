@@ -75,8 +75,8 @@ func main() {
 		return
 	}
 	var r2 struct {
-		OK      bool                 `json:"ok"`
-		Error   *map[string]string   `json:"error"`
+		OK      bool                   `json:"ok"`
+		Error   *map[string]string     `json:"error"`
 		Payload map[string]interface{} `json:"payload"`
 	}
 	json.Unmarshal(msg, &r2)
@@ -94,7 +94,7 @@ func main() {
 		"type": "action.request", "requestId": "t3",
 		"capability": "node.identity.get", "pluginId": "sessionnode-core",
 		"actorType": "user", "actorId": "test",
-		"payload":    map[string]interface{}{},
+		"payload": map[string]interface{}{},
 	}
 	data, _ = json.Marshal(req3)
 	c.WriteMessage(websocket.TextMessage, data)
@@ -104,8 +104,8 @@ func main() {
 		return
 	}
 	var r3 struct {
-		OK      bool                 `json:"ok"`
-		Error   *map[string]string   `json:"error"`
+		OK      bool                   `json:"ok"`
+		Error   *map[string]string     `json:"error"`
 		Payload map[string]interface{} `json:"payload"`
 	}
 	json.Unmarshal(msg, &r3)

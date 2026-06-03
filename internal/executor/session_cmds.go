@@ -8,9 +8,9 @@ import (
 )
 
 type sessionCreatePayload struct {
-	Command string             `json:"command"`
-	Cwd     string             `json:"cwd"`
-	Plugin  string             `json:"pluginId"`
+	Command string               `json:"command"`
+	Cwd     string               `json:"cwd"`
+	Plugin  string               `json:"pluginId"`
 	History *types.HistoryPolicy `json:"history,omitempty"`
 }
 

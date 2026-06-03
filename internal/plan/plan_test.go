@@ -90,9 +90,9 @@ func TestPlan_Transition_FailFlow(t *testing.T) {
 
 func TestPlan_Transition_Invalid(t *testing.T) {
 	tests := []struct {
-		name     string
-		setup    func(*Plan)
-		attempt  func(*Plan) error
+		name    string
+		setup   func(*Plan)
+		attempt func(*Plan) error
 	}{
 		{"denied→approved", func(p *Plan) { p.State = StateDenied }, func(p *Plan) error { return p.Approve("admin") }},
 		{"denied→denied", func(p *Plan) { p.State = StateDenied }, func(p *Plan) error { return p.Deny("admin", "no") }},
@@ -244,8 +244,8 @@ func TestPlanStore_Pending(t *testing.T) {
 
 func TestPlanStore_Pending_FilterExpired(t *testing.T) {
 	s := NewPlanStore()
-	p1 := NewPlan("p1", "c1", "s", "d", nil, "u", time.Hour)       // not expired
-	p2 := NewPlan("p2", "c2", "s", "d", nil, "u", time.Hour)       // expired by manual override
+	p1 := NewPlan("p1", "c1", "s", "d", nil, "u", time.Hour) // not expired
+	p2 := NewPlan("p2", "c2", "s", "d", nil, "u", time.Hour) // expired by manual override
 	p2.ExpiresAt = time.Now().Add(-time.Hour).UnixMilli()
 
 	s.Create(p1)
@@ -262,8 +262,8 @@ func TestPlanStore_Pending_FilterExpired(t *testing.T) {
 
 func TestPlanStore_AutoExpire(t *testing.T) {
 	s := NewPlanStore()
-	s.Create(NewPlan("p1", "c1", "s", "d", nil, "u", time.Hour))   // valid
-	p2 := NewPlan("p2", "c2", "s", "d", nil, "u", time.Hour)        // expired by override
+	s.Create(NewPlan("p1", "c1", "s", "d", nil, "u", time.Hour)) // valid
+	p2 := NewPlan("p2", "c2", "s", "d", nil, "u", time.Hour)     // expired by override
 	p2.ExpiresAt = time.Now().Add(-time.Hour).UnixMilli()
 	s.Create(p2)
 

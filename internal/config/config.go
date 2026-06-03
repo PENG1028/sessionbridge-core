@@ -361,7 +361,6 @@ func (m *Manager) Get() Config {
 	return m.config // value copy — all fields are value types or nil maps
 }
 
-
 // ---------------------------------------------------------------------------
 // Dot-notation Set
 // ---------------------------------------------------------------------------

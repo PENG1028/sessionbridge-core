@@ -14,22 +14,22 @@ const (
 	MsgTypeSessionCreated       = "session.created"
 	MsgTypeSessionEvent         = "session.event"
 	MsgTypeSessionStop          = "session.stop"
-	MsgTypeStreamSubscribe     = "stream.subscribe"
-	MsgTypeStreamSubscribed    = "stream.subscribed"
-	MsgTypeStreamChunk         = "stream.chunk"
-	MsgTypeStreamWrite         = "stream.write"
-	MsgTypeStreamReplay        = "stream.replay"
-	MsgTypeNotifyRequest       = "notify.request"
-	MsgTypeNotifyRespond       = "notify.respond"
-	MsgTypeNotifyApprovalReq   = "notify.approval.request"
+	MsgTypeStreamSubscribe      = "stream.subscribe"
+	MsgTypeStreamSubscribed     = "stream.subscribed"
+	MsgTypeStreamChunk          = "stream.chunk"
+	MsgTypeStreamWrite          = "stream.write"
+	MsgTypeStreamReplay         = "stream.replay"
+	MsgTypeNotifyRequest        = "notify.request"
+	MsgTypeNotifyRespond        = "notify.respond"
+	MsgTypeNotifyApprovalReq    = "notify.approval.request"
 	MsgTypeNotifyApprovalResult = "notify.approval.result"
-	MsgTypeError               = "error"
-	MsgTypeHello               = "hello"
-	MsgTypeWelcome             = "welcome"
-	MsgTypePluginList          = "plugin.list"
-	MsgTypePluginCheck         = "plugin.check"
-	MsgTypePing                = "ping"
-	MsgTypePong                = "pong"
+	MsgTypeError                = "error"
+	MsgTypeHello                = "hello"
+	MsgTypeWelcome              = "welcome"
+	MsgTypePluginList           = "plugin.list"
+	MsgTypePluginCheck          = "plugin.check"
+	MsgTypePing                 = "ping"
+	MsgTypePong                 = "pong"
 
 	// Peer handshake message types.
 	MsgTypePeerHello     = "peer.hello"
@@ -46,25 +46,25 @@ const (
 // Message is the universal WebSocket message envelope.
 // Type is the discriminator; all other fields are optional per message type.
 type Message struct {
-	Type         string            `json:"type"`
-	RequestID    types.RequestID   `json:"requestId,omitempty"`
-	PluginID     types.PluginID    `json:"pluginId,omitempty"`
-	SessionID    types.SessionID   `json:"sessionId,omitempty"`
-	StreamType   string            `json:"streamType,omitempty"`
-	EventSeq     types.EventSeq    `json:"eventSeq,omitempty"`
-	NodeID       types.NodeID      `json:"nodeId,omitempty"`
-	Capability   string            `json:"capability,omitempty"`
-	TargetNodeID types.NodeID      `json:"targetNodeId,omitempty"`
-	OK           bool              `json:"ok"`                // no omitempty — false must appear in error responses
-	Data         string            `json:"data,omitempty"`
-	Action       string            `json:"action,omitempty"`
-	RespondedBy  string            `json:"respondedBy,omitempty"`
-	ActorType    string            `json:"actorType,omitempty"`   // for forwarded requests: "node"
-	ActorID      string            `json:"actorId,omitempty"`     // for forwarded requests: forwarding node ID
-		ActorToken   string            `json:"actorToken,omitempty"`  // auth token for external clients
-	Payload      json.RawMessage   `json:"payload,omitempty"`
-	Error        *types.CoreError  `json:"error,omitempty"`
-	Timestamp    int64             `json:"timestamp,omitempty"`
+	Type         string           `json:"type"`
+	RequestID    types.RequestID  `json:"requestId,omitempty"`
+	PluginID     types.PluginID   `json:"pluginId,omitempty"`
+	SessionID    types.SessionID  `json:"sessionId,omitempty"`
+	StreamType   string           `json:"streamType,omitempty"`
+	EventSeq     types.EventSeq   `json:"eventSeq,omitempty"`
+	NodeID       types.NodeID     `json:"nodeId,omitempty"`
+	Capability   string           `json:"capability,omitempty"`
+	TargetNodeID types.NodeID     `json:"targetNodeId,omitempty"`
+	OK           bool             `json:"ok"` // no omitempty — false must appear in error responses
+	Data         string           `json:"data,omitempty"`
+	Action       string           `json:"action,omitempty"`
+	RespondedBy  string           `json:"respondedBy,omitempty"`
+	ActorType    string           `json:"actorType,omitempty"`  // for forwarded requests: "node"
+	ActorID      string           `json:"actorId,omitempty"`    // for forwarded requests: forwarding node ID
+	ActorToken   string           `json:"actorToken,omitempty"` // auth token for external clients
+	Payload      json.RawMessage  `json:"payload,omitempty"`
+	Error        *types.CoreError `json:"error,omitempty"`
+	Timestamp    int64            `json:"timestamp,omitempty"`
 }
 
 // --- Action messages ---

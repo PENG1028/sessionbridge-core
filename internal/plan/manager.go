@@ -19,10 +19,10 @@ var DefaultHighRiskCaps = []string{
 // Manager implements dispatcher.Planner. It wraps PlanStore and enforces
 // Plan Before Apply for a configured set of high-risk capabilities.
 type Manager struct {
-	store     *PlanStore
-	highRisk  map[string]bool
-	nextID    atomic.Int64
-	planTTL   time.Duration
+	store    *PlanStore
+	highRisk map[string]bool
+	nextID   atomic.Int64
+	planTTL  time.Duration
 }
 
 // NewManager creates a PlanManager with the given store and high-risk capabilities list.
