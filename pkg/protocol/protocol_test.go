@@ -235,6 +235,88 @@ func TestNewCoreError(t *testing.T) {
 	}
 }
 
+// TestForwardCompat verifies that UnmarshalMessage silently ignores
+// unknown fields. This is the backward-compatibility contract: within
+// the same major version, a Core receiving messages from a newer peer
+// that includes extra fields must NOT reject the message.
+//
+// If this test is changed or removed, ensure the protocol versioning
+// policy explicitly allows hard rejection of unknown fields.
+func TestForwardCompat(t *testing.T) {
+	// A base hello message as defined by the current protocol.
+	baseMsg := NewHello("node_abc", "1.0.0")
+	baseData, err := baseMsg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal base message: %v", err)
+	}
+
+	// Simulate a newer peer sending extra fields (e.g., capabilities
+	// advertisement, feature flags, or metadata) that this version
+	// does not know about.
+	var raw map[string]any
+	if err := json.Unmarshal(baseData, &raw); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	raw["ext"] = map[string]any{
+		"protocol_version": "2.0",
+		"features":         []string{"compression", "binary_frames"},
+	}
+	extended, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal extended message: %v", err)
+	}
+
+	// This must NOT error: unknown fields must be silently ignored
+	// to maintain forward compatibility within the same major version.
+	parsed, err := UnmarshalMessage(extended)
+	if err != nil {
+		t.Fatalf("UnmarshalMessage rejected extended message (broken forward compat): %v\njson: %s", err, string(extended))
+	}
+	if parsed.Type != MsgTypeHello {
+		t.Errorf("Type = %q, want %q", parsed.Type, MsgTypeHello)
+	}
+	if parsed.NodeID != "node_abc" {
+		t.Errorf("NodeID = %q, want node_abc", parsed.NodeID)
+	}
+	if parsed.Data != "1.0.0" {
+		t.Errorf("Data = %q, want 1.0.0", parsed.Data)
+	}
+
+	// Verify the unknown fields were silently dropped (not stored).
+	if parsed.Payload != nil {
+		t.Errorf("Payload should be nil, got %s", string(parsed.Payload))
+	}
+}
+
+// TestMarshalUnmarshal_FullMessage verifies that a fully populated
+// message round-trips through MarshalJSON/UnmarshalMessage with all
+// fields preserved correctly.
+func TestMarshalUnmarshal_FullMessage(t *testing.T) {
+	req := createTestCapabilityRequest()
+	msg := NewActionRequest(req)
+
+	data, err := msg.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	parsed, err := UnmarshalMessage(data)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.Type != MsgTypeActionRequest {
+		t.Errorf("Type = %q", parsed.Type)
+	}
+	if parsed.RequestID != req.RequestID {
+		t.Errorf("RequestID = %q", parsed.RequestID)
+	}
+	if parsed.PluginID != req.PluginID {
+		t.Errorf("PluginID = %q", parsed.PluginID)
+	}
+	if parsed.Capability != req.Capability {
+		t.Errorf("Capability = %q", parsed.Capability)
+	}
+}
+
 // --- Helpers ---
 
 func createTestCapabilityRequest() *types.CapabilityRequest {
