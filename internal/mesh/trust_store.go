@@ -259,8 +259,13 @@ func (ts *TrustStore) Trusted(nodeID string, publicKey []byte) (bool, error) {
 		return false, nil
 	}
 
-	// Check revocation via status.
-	if p.Status == "revoked" {
+	// Check revocation and expiry via status.
+	if p.Status == "revoked" || p.Status == "expired" {
+		return false, nil
+	}
+
+	// Check timestamp-based expiry.
+	if p.TrustExpiresAt > 0 && time.Now().UnixMilli() > p.TrustExpiresAt {
 		return false, nil
 	}
 

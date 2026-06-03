@@ -725,6 +725,7 @@ func (s *Server) writeLoop(conn *websocket.Conn, ch <-chan []byte, wg *sync.Wait
 			}
 			if err := conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
 				log.Printf("[ws] set write deadline error: %v", err)
+				conn.Close()
 				return
 			}
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
