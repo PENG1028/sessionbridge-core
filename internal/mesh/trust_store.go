@@ -1,9 +1,11 @@
 package mesh
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ const (
 	TrustStatusOffline      = "offline"
 	TrustStatusExpired      = "expired"
 	TrustStatusRevoked      = "revoked"
+	TrustStatusNotTrusted   = "not_trusted" // remote side rejected our connection (pairing lost)
 )
 
 // TrustPolicy dictates how a trusted peer is allowed to interact.
@@ -82,7 +85,8 @@ func (ts *TrustStore) SetLocalNodeID(nodeID string) {
 }
 
 // Load reads the trust file from disk. If the file does not exist the store
-// remains empty (no error).
+// remains empty (no error). If the file is empty or corrupt, the backup file
+// (.bak) is tried before falling back to an empty store.
 func (ts *TrustStore) Load() error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -95,9 +99,25 @@ func (ts *TrustStore) Load() error {
 		return fmt.Errorf("mesh: read trust store %s: %w", ts.path, err)
 	}
 
+	// Empty or whitespace-only file → try backup, then fall through to empty.
+	if len(bytes.TrimSpace(data)) == 0 {
+		ts.peers = make(map[string]*TrustedPeer)
+		if err := ts.tryLoadBackup(); err != nil {
+			ts.peers = make(map[string]*TrustedPeer)
+		}
+		return nil
+	}
+
 	var payload trustFilePayload
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return fmt.Errorf("mesh: unmarshal trust store %s: %w", ts.path, err)
+		// Corrupt JSON → try backup before giving up.
+		log.Printf("[trust] corrupt trust store %s: %v — trying backup", ts.path, err)
+		ts.peers = make(map[string]*TrustedPeer)
+		if err := ts.tryLoadBackup(); err != nil {
+			log.Printf("[trust] backup also failed: %v — starting empty", err)
+			ts.peers = make(map[string]*TrustedPeer)
+		}
+		return nil
 	}
 
 	ts.peers = make(map[string]*TrustedPeer, len(payload.Peers))
@@ -110,6 +130,29 @@ func (ts *TrustStore) Load() error {
 	return nil
 }
 
+// tryLoadBackup attempts to load peers from the .bak file.
+func (ts *TrustStore) tryLoadBackup() error {
+	bakPath := ts.path + ".bak"
+	data, err := os.ReadFile(bakPath)
+	if err != nil {
+		return fmt.Errorf("read backup: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return fmt.Errorf("backup file is empty")
+	}
+	var payload trustFilePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("unmarshal backup: %w", err)
+	}
+	for _, p := range payload.Peers {
+		if p != nil && p.NodeID != "" {
+			ts.peers[p.NodeID] = p.deepCopy()
+		}
+	}
+	log.Printf("[trust] recovered %d peer(s) from backup", len(ts.peers))
+	return nil
+}
+
 // Save persists the current peer set to disk. It holds a read lock only
 // while snapshotting peers into memory, then releases the lock before
 // marshaling and writing to disk.
@@ -117,7 +160,8 @@ func (ts *TrustStore) Save() error {
 	return ts.writeFile(ts.snapshot())
 }
 
-// writeFile marshals the peer list and writes it to disk.
+// writeFile marshals the peer list and writes it to disk atomically.
+// The previous content is saved to a .bak file before overwriting.
 func (ts *TrustStore) writeFile(peers []*TrustedPeer) error {
 	payload := trustFilePayload{Peers: peers}
 	data, err := json.MarshalIndent(payload, "", "  ")
@@ -125,8 +169,19 @@ func (ts *TrustStore) writeFile(peers []*TrustedPeer) error {
 		return fmt.Errorf("mesh: marshal trust store: %w", err)
 	}
 
-	if err := os.WriteFile(ts.path, data, 0600); err != nil {
-		return fmt.Errorf("mesh: write trust store %s: %w", ts.path, err)
+	// 1. Save backup of current file (if it exists and has content).
+	bakPath := ts.path + ".bak"
+	if current, err := os.ReadFile(ts.path); err == nil && len(bytes.TrimSpace(current)) > 0 {
+		_ = os.WriteFile(bakPath, current, 0600)
+	}
+
+	// 2. Write to temp file, then rename for atomicity.
+	tmpPath := ts.path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		return fmt.Errorf("mesh: write trust store temp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, ts.path); err != nil {
+		return fmt.Errorf("mesh: rename trust store %s -> %s: %w", tmpPath, ts.path, err)
 	}
 	return nil
 }

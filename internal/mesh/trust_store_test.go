@@ -271,9 +271,13 @@ func TestTrustStore_LoadInvalidJSON(t *testing.T) {
 	}
 
 	ts := NewTrustStore(path)
-	err := ts.Load()
-	if err == nil {
-		t.Fatal("expected error loading invalid JSON")
+	// Load should succeed (gracefully degrade to empty store when file is corrupt
+	// and no backup is available).
+	if err := ts.Load(); err != nil {
+		t.Fatalf("Load should not error on corrupt file (should fall back to empty): %v", err)
+	}
+	if len(ts.List()) != 0 {
+		t.Fatal("expected empty store after loading corrupt file")
 	}
 }
 

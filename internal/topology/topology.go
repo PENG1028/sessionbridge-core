@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -52,6 +53,7 @@ const (
 	StatusConnected    = "connected"
 	StatusDisconnected = "disconnected"
 	StatusConnecting   = "connecting"
+	StatusRejected     = "rejected" // remote side does not trust us (pairing lost)
 )
 
 const (
@@ -89,7 +91,17 @@ func (p *Peer) getStatus() string {
 	return p.status
 }
 
-// --- PeerTopology ---
+// PeerRejectedError is returned when the remote peer explicitly rejects our
+// connection because we are not in their trust store (pairing lost).
+// connectLoop uses this to set StatusRejected instead of StatusDisconnected.
+type PeerRejectedError struct {
+	Code    string
+	Message string
+}
+
+func (e *PeerRejectedError) Error() string {
+	return fmt.Sprintf("peer rejected: %s - %s", e.Code, e.Message)
+}
 
 // StreamChunkHandler is called when a stream.chunk or session.event message
 // arrives from a peer. The handler must route the chunk to local subscribers
@@ -619,13 +631,28 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 			continue
 		}
 
-		// Perform peer handshake only if identity is configured.
-		if pt.identity != nil {
+			// Perform peer handshake only if identity is configured.
+			if pt.identity != nil {
 			if err := pt.peerHandshake(conn, peer.ID); err != nil {
 				pt.log.Printf("handshake with %s failed: %v", peer.ID, err)
 				conn.Close()
 
 				peer.mu.Lock()
+				// Peer explicitly rejected us (not in their trust store or pairing lost).
+				// Set StatusRejected so the UI can show the right message, and use a
+				// much longer retry interval — no point hammering a rejected connection.
+				var rejected *PeerRejectedError
+				if errors.As(err, &rejected) {
+					peer.status = StatusRejected
+					peer.mu.Unlock()
+					pt.log.Printf("peer %s REJECTED: %s — marking as rejected, retrying in 5m", peer.ID, rejected.Code)
+					select {
+					case <-time.After(5 * time.Minute):
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
 				peer.status = StatusDisconnected
 				peer.mu.Unlock()
 
@@ -641,7 +668,7 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 				}
 				continue
 			}
-		}
+			}
 
 		backoff = 1 * time.Second // reset on success
 
@@ -743,6 +770,23 @@ func (pt *PeerTopology) peerHandshake(conn *websocket.Conn, peerID types.NodeID)
 	challengeMsg, err := readMessage(conn, 30*time.Second)
 	if err != nil {
 		return fmt.Errorf("read peer.challenge: %w", err)
+	}
+	// Server may reject us before sending a challenge — detect peer.error
+	// and distinguish "pairing lost" from transient failures.
+	if challengeMsg.Type == protocol.MsgTypePeerError {
+		errCode := "unknown"
+		errMsg := "peer rejected connection"
+		if challengeMsg.Error != nil {
+			errCode = challengeMsg.Error.Code
+			errMsg = challengeMsg.Error.Message
+		}
+		switch errCode {
+		case protocol.ErrCodePeerUnknown, protocol.ErrCodePeerRevoked,
+			protocol.ErrCodePeerExpired, protocol.ErrCodePeerKeyMismatch:
+			return &PeerRejectedError{Code: errCode, Message: errMsg}
+		default:
+			return fmt.Errorf("peer error: %s - %s", errCode, errMsg)
+		}
 	}
 	if challengeMsg.Type != protocol.MsgTypePeerChallenge {
 		return fmt.Errorf("expected peer.challenge, got %q", challengeMsg.Type)
