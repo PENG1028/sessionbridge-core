@@ -33,14 +33,19 @@ func nodeList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	nodes := deps.Nodes.ListNodes()
 	out := make([]map[string]interface{}, 0, len(nodes))
 	for _, n := range nodes {
-		out = append(out, map[string]interface{}{
+		entry := map[string]interface{}{
 			"nodeId":      string(n.ID),
 			"name":        n.Name,
 			"address":     n.Address,
 			"tags":        n.Tags,
 			"status":      n.Status,
 			"displayName": n.DisplayName,
-		})
+		}
+		if n.Role != "" {
+			entry["role"] = n.Role
+			entry["inboundPeerReachable"] = n.InboundPeerReachable
+		}
+		out = append(out, entry)
 	}
 	return map[string]interface{}{
 		"nodes": out,
@@ -79,7 +84,7 @@ func nodeInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 func enrichNodeInfo(n NodeInfo) map[string]interface{} {
 	hostname, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	return map[string]interface{}{
+	entry := map[string]interface{}{
 		"nodeId":      string(n.ID),
 		"name":        n.Name,
 		"address":     n.Address,
@@ -92,6 +97,11 @@ func enrichNodeInfo(n NodeInfo) map[string]interface{} {
 		"arch":        runtime.GOARCH,
 		"numCPU":      runtime.NumCPU(),
 	}
+	if n.Role != "" {
+		entry["role"] = n.Role
+		entry["inboundPeerReachable"] = n.InboundPeerReachable
+	}
+	return entry
 }
 
 // nodeHealth returns health check for a node (local-only stub).
