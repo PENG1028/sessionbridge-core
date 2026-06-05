@@ -43,8 +43,8 @@ func nodeList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		}
 		if n.Role != "" {
 			entry["role"] = n.Role
-			entry["inboundPeerReachable"] = n.InboundPeerReachable
 		}
+		entry["inboundPeerReachable"] = n.InboundPeerReachable
 		out = append(out, entry)
 	}
 	return map[string]interface{}{
@@ -99,8 +99,8 @@ func enrichNodeInfo(n NodeInfo) map[string]interface{} {
 	}
 	if n.Role != "" {
 		entry["role"] = n.Role
-		entry["inboundPeerReachable"] = n.InboundPeerReachable
 	}
+	entry["inboundPeerReachable"] = n.InboundPeerReachable
 	return entry
 }
 

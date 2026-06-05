@@ -177,10 +177,6 @@ func main() {
 			log.Printf("[startup] restore peer %s: %v", tp.NodeID, err)
 		}
 	}
-	topoCtx, topoCancel := context.WithCancel(context.Background())
-	go topo.Start(topoCtx)
-	defer topoCancel()
-
 	// Build capability map from the core capabilities.
 	permCaps := make(map[types.PluginID][]string)
 	for pidStr, list := range permission.AllPluginsCaps {
@@ -246,6 +242,10 @@ func main() {
 	topo.SetOnStatusChange(func(nid types.NodeID, status string) {
 		sv.BroadcastNodeEvent(nid, status)
 	})
+
+	topoCtx, topoCancel := context.WithCancel(context.Background())
+	go topo.Start(topoCtx)
+	defer topoCancel()
 
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
 	fmt.Printf("  Node ID: %s\n", nodeID)

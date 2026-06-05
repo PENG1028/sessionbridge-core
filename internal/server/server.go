@@ -516,6 +516,9 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 		s.topo.SetInboundWriteCh(types.NodeID(peerNodeID), writeCh)
 	}
 
+	// Broadcast SSE event so web clients see real-time node status.
+	s.BroadcastNodeEvent(types.NodeID(peerNodeID), "connected")
+
 	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
@@ -583,6 +586,9 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[peer-ws] trust store disconnect update failed for %s: %v", peerNodeID, err)
 	}
 	log.Printf("[peer-ws] peer %s disconnected", peerNodeID)
+
+	// Broadcast SSE event so web clients see real-time disconnect.
+	s.BroadcastNodeEvent(types.NodeID(peerNodeID), "disconnected")
 }
 
 // handlePeerInviteAccept handles HTTP POST requests for remote peer pairing.
