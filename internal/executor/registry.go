@@ -27,12 +27,14 @@ type ExecFunc func(req *types.CapabilityRequest, deps *Deps) (interface{}, error
 
 // NodeInfo describes a known node for the node.list capability.
 type NodeInfo struct {
-	ID          types.NodeID `json:"nodeId"`
-	Name        string       `json:"name"`
-	Address     string       `json:"address"`
-	Tags        []string     `json:"tags"`
-	Status      string       `json:"status"`
-	DisplayName string       `json:"displayName"`
+	ID                   types.NodeID `json:"nodeId"`
+	Name                 string       `json:"name"`
+	Address              string       `json:"address"`
+	Tags                 []string     `json:"tags"`
+	Status               string       `json:"status"`
+	DisplayName          string       `json:"displayName"`
+	Role                 string       `json:"role,omitempty"`       // "relay" or "leaf" — set for local node
+	InboundPeerReachable bool         `json:"inboundPeerReachable"` // can accept /peer/ws connections
 }
 
 // NodeLister provides the set of known peers to the executor.

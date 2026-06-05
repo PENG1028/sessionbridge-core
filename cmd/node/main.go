@@ -137,11 +137,15 @@ func main() {
 	for i, p := range cfg.Topology.Peers {
 		peers[i] = topology.PeerConfig{ID: types.NodeID(p.ID), Address: p.Address, Tags: p.Tags}
 	}
+	// Determine if this Core can accept inbound /peer/ws connections.
+	// A Core bound to a non-loopback address is a candidate relay.
+	inboundPeerReachable := isInboundPeerReachable(addr)
 	topoCfg := topology.Config{
-		LocalID:   nodeID,
-		LocalName: cfg.Node.Name,
-		Identity:  nodeIdentity,
-		Peers:     peers,
+		LocalID:              nodeID,
+		LocalName:            cfg.Node.Name,
+		Identity:             nodeIdentity,
+		Peers:                peers,
+		InboundPeerReachable: inboundPeerReachable,
 	}
 	topo := topology.New(topoCfg)
 	// Forward stream chunks and session events from peers to local subscribers.
@@ -155,6 +159,9 @@ func main() {
 	})
 	// Restore persistent peers from trust store — peers added via invite
 	// pairing that should automatically reconnect after a Core restart.
+	// Peers without a stored address (inbound-paired) are still registered
+	// in topology so they can accept inbound connections when the peer
+	// reconnects to us.
 	for _, tp := range trustStore.List() {
 		if tp.Status == mesh.TrustStatusRevoked || tp.Status == mesh.TrustStatusExpired {
 			continue
@@ -162,10 +169,11 @@ func main() {
 		if !tp.AutoReconnect {
 			continue
 		}
-		if len(tp.Addresses) == 0 {
-			continue
+		address := ""
+		if len(tp.Addresses) > 0 {
+			address = tp.Addresses[0]
 		}
-		if err := topo.AddOrUpdatePeer(types.NodeID(tp.NodeID), tp.Addresses[0], true); err != nil {
+		if err := topo.AddOrUpdatePeer(types.NodeID(tp.NodeID), address, true); err != nil {
 			log.Printf("[startup] restore peer %s: %v", tp.NodeID, err)
 		}
 	}
@@ -234,6 +242,11 @@ func main() {
 	sv.SetTopology(topo)
 	topo.SetAuthToken(token)
 
+	// Wire topology status changes to SSE broadcast (must be after server creation).
+	topo.SetOnStatusChange(func(nid types.NodeID, status string) {
+		sv.BroadcastNodeEvent(nid, status)
+	})
+
 	fmt.Printf("SessionNode Go Core — Phase 1\n")
 	fmt.Printf("  Node ID: %s\n", nodeID)
 	fmt.Printf("  Listen:  %s\n", addr)
@@ -255,6 +268,27 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// isInboundPeerReachable returns true if this Core listens on a non-loopback
+// address that can accept incoming /peer/ws connections from other Cores.
+// This determines whether the node is a relay (can be dialed) vs leaf (outbound-only).
+func isInboundPeerReachable(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	// Binding to all interfaces (0.0.0.0 or ::) means externally reachable.
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 // isPublicAddr returns true when the listen address is not localhost/loopback.

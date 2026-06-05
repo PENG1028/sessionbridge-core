@@ -41,6 +41,10 @@ const (
 	// Mesh call — execute a capability on a trusted peer and return the result.
 	MsgTypeMeshCall   = "mesh.call"
 	MsgTypeMeshResult = "mesh.result"
+
+	// SSE events — broadcast to all web clients via /ws connections.
+	MsgTypeNodeConnected    = "node.connected"
+	MsgTypeNodeDisconnected = "node.disconnected"
 )
 
 // Message is the universal WebSocket message envelope.
@@ -352,6 +356,22 @@ func NewMeshCall(req *types.CapabilityRequest) *Message {
 		Payload:      payload,
 		ActorType:    "node",
 		ActorID:      req.Actor.ID,
+	}
+}
+
+// NewNodeConnected creates a node.connected SSE event for web clients.
+func NewNodeConnected(nodeID types.NodeID) *Message {
+	return &Message{
+		Type:   MsgTypeNodeConnected,
+		NodeID: nodeID,
+	}
+}
+
+// NewNodeDisconnected creates a node.disconnected SSE event for web clients.
+func NewNodeDisconnected(nodeID types.NodeID) *Message {
+	return &Message{
+		Type:   MsgTypeNodeDisconnected,
+		NodeID: nodeID,
 	}
 }
 

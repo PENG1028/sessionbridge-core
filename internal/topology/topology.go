@@ -37,6 +37,7 @@ type Config struct {
 	LocalName string             // from node.name, used as base for display naming
 	Identity  *mesh.NodeIdentity // local node identity for peer handshake
 	Peers     []PeerConfig
+	InboundPeerReachable bool // set at startup: can this Core accept /peer/ws?
 }
 
 // PeerConfig describes a remote peer to connect to.
@@ -121,8 +122,10 @@ type PeerTopology struct {
 	pending   map[types.RequestID]chan *types.CapabilityResponse
 	pendingMu sync.Mutex
 
-	streamChunkHandler StreamChunkHandler
-	dispatcher         *dispatcher.Dispatcher
+	streamChunkHandler  StreamChunkHandler
+	dispatcher          *dispatcher.Dispatcher
+	inboundPeerReachable bool
+	onStatusChange      func(types.NodeID, string) // SSE broadcast callback
 
 	cancelFuncs map[types.NodeID]context.CancelFunc
 	cancelMu    sync.Mutex
@@ -141,9 +144,10 @@ type PeerTopology struct {
 // with the "local" tag. Configured peers are registered in disconnected state.
 func New(cfg Config) *PeerTopology {
 	pt := &PeerTopology{
-		localID:        cfg.LocalID,
-		localName:      cfg.LocalName,
-		identity:       cfg.Identity,
+		localID:              cfg.LocalID,
+		localName:            cfg.LocalName,
+		identity:             cfg.Identity,
+		inboundPeerReachable: cfg.InboundPeerReachable,
 		peers:          make(map[types.NodeID]*Peer),
 		pending:        make(map[types.RequestID]chan *types.CapabilityResponse),
 		cancelFuncs:    make(map[types.NodeID]context.CancelFunc),
@@ -178,6 +182,14 @@ func (pt *PeerTopology) SetStreamChunkHandler(h StreamChunkHandler) {
 // node-to-node capability requests.
 func (pt *PeerTopology) SetAuthToken(token string) {
 	pt.authToken = token
+}
+
+// SetOnStatusChange registers a callback for SSE broadcast of peer
+// connect/disconnect events.
+func (pt *PeerTopology) SetOnStatusChange(fn func(types.NodeID, string)) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	pt.onStatusChange = fn
 }
 
 // SetDispatcher wires the capability dispatcher so that incoming mesh.call
@@ -276,6 +288,17 @@ func (pt *PeerTopology) ListNodes() []executor.NodeInfo {
 			Address: p.Address,
 			Tags:    p.Tags,
 			Status:  p.getStatus(),
+		}
+
+		// Set role for local node based on actual reachability.
+		// Remote nodes get their role from their own Core (not known here).
+		if p.ID == pt.localID {
+			if pt.inboundPeerReachable {
+				info.Role = "relay"
+			} else {
+				info.Role = "leaf"
+			}
+			info.InboundPeerReachable = pt.inboundPeerReachable
 		}
 
 		if dn, ok := displayNames[p.ID]; ok {
@@ -681,6 +704,13 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 		peer.status = StatusConnected
 		peer.mu.Unlock()
 
+		// Notify SSE listeners about the connection.
+		pt.mu.RLock()
+		if pt.onStatusChange != nil {
+			pt.onStatusChange(peer.ID, StatusConnected)
+		}
+		pt.mu.RUnlock()
+
 		pt.log.Printf("connected to peer %s (%s)", peer.ID, url)
 
 		conn.SetReadDeadline(time.Now().Add(peerPongWait))
@@ -734,6 +764,12 @@ func (pt *PeerTopology) connectLoop(ctx context.Context, peer *Peer) {
 		peer.conn = nil
 		peer.status = StatusDisconnected
 		peer.mu.Unlock()
+
+		pt.mu.RLock()
+		if pt.onStatusChange != nil {
+			pt.onStatusChange(peer.ID, StatusDisconnected)
+		}
+		pt.mu.RUnlock()
 		close(writeCh)
 
 		pt.log.Printf("disconnected from peer %s, reconnecting...", peer.ID)

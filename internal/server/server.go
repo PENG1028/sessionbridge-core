@@ -115,6 +115,22 @@ func (s *Server) SetTopology(topo peerTopology) {
 	s.topo = topo
 }
 
+// BroadcastNodeEvent sends a node.connected or node.disconnected SSE event
+// to all connected web clients via the connection registry. Called by topology
+// when a peer connects or disconnects.
+func (s *Server) BroadcastNodeEvent(nodeID types.NodeID, status string) {
+	var msg *protocol.Message
+	switch status {
+	case "connected":
+		msg = protocol.NewNodeConnected(nodeID)
+	case "disconnected":
+		msg = protocol.NewNodeDisconnected(nodeID)
+	default:
+		return
+	}
+	s.connRegistry.Broadcast(msg)
+}
+
 func (s *Server) registerHandlers() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
