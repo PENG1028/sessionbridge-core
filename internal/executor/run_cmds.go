@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/user/sessionnode/go-core/internal/history"
@@ -26,6 +27,31 @@ type spawnRequest struct {
 	ParentSessionID string   `json:"parentSessionId,omitempty"`
 }
 
+// osc7Prompt returns shell arguments that set up an OSC 7-emitting prompt,
+// or nil if the shell type doesn't need / doesn't support prompt setup.
+// When args are returned the frontend MUST NOT inject its own prompt via stdin —
+// the shell will start with OSC 7 already configured and the terminal stays clean.
+func osc7Prompt(command string) []string {
+	base := filepath.Base(command)
+	switch base {
+	case "pwsh.exe", "pwsh", "powershell.exe", "powershell":
+		// Pure-string prompt — one output channel, no $host.ui.Write tearing.
+		// $([char]27) is unambiguously ESC regardless of backtick parsing rules.
+		return []string{
+			"-NoExit", "-NoLogo", "-Command",
+			`function prompt { $e=[char]27; $p=$PWD.Path.Replace('\','/'); "$e]7;file://$env:COMPUTERNAME/$p$e\PS $PWD> " }`,
+		}
+	case "bash":
+		return []string{"-c", `export PROMPT_COMMAND='printf "\033]7;file://$HOSTNAME$PWD\033\\"'; exec bash`}
+	case "cmd.exe", "cmd":
+		// cmd.exe: PROMPT env var supports $E for ESC, $P for drive+path, $G for >.
+		// Passed via /K so the shell stays interactive after setting the prompt.
+		return []string{"/K", `prompt $E]7;file://%COMPUTERNAME%/$P$E\$P$G`}
+	default:
+		return nil
+	}
+}
+
 // spawnManagedProcess runs the shared process-spawn logic and returns the
 // resulting session ID. Used by both process.spawn and run.create.
 func spawnManagedProcess(p spawnRequest, req *types.CapabilityRequest, deps *Deps) (types.SessionID, error) {
@@ -34,6 +60,15 @@ func spawnManagedProcess(p spawnRequest, req *types.CapabilityRequest, deps *Dep
 			p.Command = defaultWindowsShell()
 		} else {
 			p.Command = "bash"
+		}
+	}
+
+	// Inject OSC 7 prompt args so the shell starts with CWD tracking enabled.
+	// This replaces the old stdin-based prompt injection — no echoed function
+	// definition, no ">>" continuation prompts, clean terminal from the start.
+	if p.Pty && len(p.Args) == 0 {
+		if osc7Args := osc7Prompt(p.Command); osc7Args != nil {
+			p.Args = osc7Args
 		}
 	}
 
