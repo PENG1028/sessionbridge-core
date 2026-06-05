@@ -79,6 +79,14 @@ func hiddenWindowSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{HideWindow: true}
 }
 
+// setHideWindow configures an exec.Cmd to run without a visible console window.
+func setHideWindow(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+}
+
 // shouldUseNodePTY returns true for interactive shells that benefit from
 // a full terminal (ConPTY). Short-lived helper binaries and plugin tasks
 // must not go through node-pty; they use plain Spawn/pipe mode instead.

@@ -89,6 +89,7 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	setHideWindow(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

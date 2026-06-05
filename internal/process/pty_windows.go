@@ -32,6 +32,7 @@ const (
 	_PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016 // ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
 	_EXTENDED_STARTUPINFO_PRESENT        = 0x00080000
 	_CREATE_UNICODE_ENVIRONMENT          = 0x00000400
+	_CREATE_NO_WINDOW                    = 0x08000000
 	_STARTF_USESTDHANDLES                = 0x00000100
 	_PIPE_ACCESS_DUPLEX                  = 0x00000003
 	_FILE_FLAG_FIRST_PIPE_INSTANCE       = 0x00080000
@@ -510,7 +511,7 @@ func (m *Manager) spawnWithConPTY(driver *conPTYDriver, command string, args []s
 		0,                                   // lpProcessAttributes
 		0,                                   // lpThreadAttributes
 		0,                                   // bInheritHandles
-		_EXTENDED_STARTUPINFO_PRESENT|_CREATE_UNICODE_ENVIRONMENT,
+		_EXTENDED_STARTUPINFO_PRESENT|_CREATE_UNICODE_ENVIRONMENT|_CREATE_NO_WINDOW,
 		0,                               // lpEnvironment
 		uintptr(unsafe.Pointer(cwdPtr)), // lpCurrentDirectory
 		uintptr(unsafe.Pointer(si)),     // lpStartupInfo (=STARTUPINFOEX)

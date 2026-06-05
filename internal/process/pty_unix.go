@@ -212,3 +212,6 @@ func setRaw(fd uintptr) error {
 func terminateByHandle(_ uintptr) error {
 	return fmt.Errorf("process handle signaling not supported on this platform")
 }
+
+// setHideWindow is a no-op on Unix — processes don't create visible windows.
+func setHideWindow(_ *exec.Cmd) {}
