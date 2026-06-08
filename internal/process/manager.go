@@ -27,6 +27,7 @@ type Process struct {
 	RootSessionID   types.SessionID // root of the process tree
 	PluginID        types.PluginID  // plugin that owns this process
 	Kind            string          // process kind: "terminal", "task", "agent", etc.
+	RunID           string          // corresponding RunStore runId (empty if spawned outside run.create)
 	Cmd             *exec.Cmd
 	State           string
 	ExitCode        int
@@ -90,6 +91,7 @@ func (m *Manager) Spawn(command string, args []string, cwd string, cfg *SpawnCon
 		cmd.Dir = cwd
 	}
 	setHideWindow(cmd)
+	setProcessGroup(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -221,6 +223,17 @@ func (m *Manager) Get(sid types.SessionID) *Process {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.processes[sid]
+}
+
+// SetRunID sets the RunID cross-reference on a tracked process.
+// This links a ProcessManager entry to its corresponding RunStore run.
+// If the process doesn't exist (already exited), the call is a no-op.
+func (m *Manager) SetRunID(sid types.SessionID, runID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p, ok := m.processes[sid]; ok {
+		p.RunID = runID
+	}
 }
 
 // DescendantIDs returns all descendant session IDs for the given process,
@@ -391,14 +404,22 @@ func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for sid, proc := range m.processes {
+		// Kill the entire OS process tree — not just the parent.
+		// This catches children of children that the ProcessManager
+		// never explicitly tracked (e.g. claude → python build.py).
+		if proc.State == "running" && proc.PID > 0 {
+			killProcessTree(proc.PID, "kill")
+		}
+		// For ConPTY/console-mode processes (Cmd == nil, processHandle set),
+		// also attempt a direct handle-terminate as backup.
+		if proc.State == "running" && proc.processHandle != 0 {
+			_ = terminateByHandle(proc.processHandle)
+		}
 		if proc.ptyDriver != nil {
 			proc.ptyDriver.Close()
 		}
 		if proc.StdinPipe != nil {
 			proc.StdinPipe.Close()
-		}
-		if proc.State == "running" && proc.Cmd != nil && proc.Cmd.Process != nil {
-			proc.Cmd.Process.Kill()
 		}
 		delete(m.processes, sid)
 	}

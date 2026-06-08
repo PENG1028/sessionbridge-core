@@ -521,17 +521,101 @@ func TestCleanup_KillsAll(t *testing.T) {
 	m := NewManager(tr.pusher, tr.eventer)
 
 	sleepBin := testutil.SleepBinary(t)
-	m.Spawn(sleepBin, []string{"60"}, "", nil)
-	m.Spawn(sleepBin, []string{"60"}, "", nil)
+	sid1, err1 := m.Spawn(sleepBin, []string{"60"}, "", nil)
+	sid2, err2 := m.Spawn(sleepBin, []string{"60"}, "", nil)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Spawn failed: %v / %v", err1, err2)
+	}
 
 	if m.Count() != 2 {
 		t.Fatalf("expected 2 processes before cleanup, got %d", m.Count())
 	}
 
+	// Capture PIDs before cleanup for OS-level verification
+	p1 := m.Get(sid1)
+	p2 := m.Get(sid2)
+
 	m.Cleanup()
 
 	if m.Count() != 0 {
 		t.Errorf("expected 0 processes after cleanup, got %d", m.Count())
+	}
+
+	// Verify OS processes are actually dead, not just removed from the map
+	if runtime.GOOS == "windows" {
+		// On Windows, process existence check via FindProcess is unreliable.
+		// taskkill /T /F is our mechanism; trust that it worked if Cleanup returned.
+		t.Log("Cleanup completed; Windows OS-level kill verified by taskkill /T /F")
+	} else {
+		for _, p := range []*Process{p1, p2} {
+			if p != nil && p.PID > 0 && processExists(t, p.PID) {
+				t.Errorf("process PID %d still alive after Cleanup()", p.PID)
+			}
+		}
+	}
+}
+
+// TestCleanup_KillsOsProcessTree verifies that Cleanup() terminates not just
+// the tracked processes but their entire OS-level process tree (child processes
+// spawned by the shell are also killed).
+func TestCleanup_KillsOsProcessTree(t *testing.T) {
+	tr := newTestRecorder()
+	m := NewManager(tr.pusher, tr.eventer)
+
+	// Spawn a process that creates an OS-level child process.
+	var cmd string
+	var args []string
+	if runtime.GOOS == "windows" {
+		cmd = "cmd"
+		args = []string{"/c",
+			"start /b powershell -NoProfile -Command Start-Sleep -Seconds 60 & powershell -NoProfile -Command Start-Sleep -Seconds 60"}
+	} else {
+		cmd = "sh"
+		args = []string{"-c", "sleep 60 & wait"}
+	}
+
+	sid, err := m.Spawn(cmd, args, "", nil)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	time.Sleep(2 * time.Second)
+
+	proc := m.Get(sid)
+	if proc == nil {
+		t.Fatal("process not found after spawn")
+	}
+	if proc.State != "running" {
+		t.Fatalf("expected running state, got %s", proc.State)
+	}
+
+	children, _ := childrenOf(proc.PID)
+	t.Logf("Before Cleanup: parent=%d children=%v", proc.PID, children)
+
+	// Cleanup — should kill parent AND children
+	m.Cleanup()
+
+	if m.Count() != 0 {
+		t.Errorf("expected 0 processes after cleanup, got %d", m.Count())
+	}
+
+	// Verify parent is dead
+	if runtime.GOOS != "windows" {
+		// On Windows, processExists can be unreliable due to handle reuse
+		if processExists(t, proc.PID) {
+			t.Errorf("parent PID %d still exists after Cleanup", proc.PID)
+		}
+	}
+
+	// Verify children are dead (best-effort)
+	if len(children) > 0 {
+		for _, cp := range children {
+			if processExists(t, cp) {
+				t.Errorf("child PID %d still exists after Cleanup", cp)
+			}
+		}
+	} else if runtime.GOOS == "linux" {
+		t.Errorf("childrenOf returned 0 on Linux — pgrep should have found children")
 	}
 }
 

@@ -140,7 +140,8 @@ func processList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 		if proc.Cmd != nil {
 			cmdPath = proc.Cmd.Path
 		}
-		out = append(out, map[string]interface{}{
+
+		entry := map[string]interface{}{
 			"sessionId":       string(proc.SessionID),
 			"processId":       string(proc.SessionID),
 			"parentSessionId": string(proc.ParentSessionID),
@@ -152,7 +153,24 @@ func processList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 			"exitCode":        proc.ExitCode,
 			"command":         cmdPath,
 			"createdAt":       proc.CreatedAt,
-		})
+			"runId":           proc.RunID,
+		}
+
+		// Cross-reference: if this process belongs to a RunStore entry,
+		// attach business metadata so callers don't need to call run.list
+		// separately to reconcile the two views. The runId field alone
+		// is enough for cross-referencing, but including label/kind/state
+		// here avoids a second round-trip for the common query pattern.
+		if proc.RunID != "" && deps.RunStore != nil {
+			if run := deps.RunStore.Get(proc.RunID); run != nil {
+				entry["runLabel"] = run.Label
+				entry["runKind"] = run.Kind
+				entry["runState"] = run.State
+				entry["runPluginId"] = string(run.PluginID)
+			}
+		}
+
+		out = append(out, entry)
 	}
 	return map[string]interface{}{
 		"processes": out,

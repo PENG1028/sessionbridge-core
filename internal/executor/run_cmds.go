@@ -188,6 +188,12 @@ func runCreate(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 		r = deps.RunStore.Create(r)
 	}
 
+	// Cross-reference: set RunID on the Process so process.list
+	// can return run metadata alongside process info.
+	if deps.Processes != nil {
+		deps.Processes.SetRunID(sid, r.RunID)
+	}
+
 	ptyMode := "pipe"
 	if p.Pty && deps.Processes != nil {
 		if proc := deps.Processes.Get(sid); proc != nil {

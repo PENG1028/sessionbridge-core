@@ -77,6 +77,24 @@ func (s *Store) GetRef(runID string) *Run {
 	return s.runs[runID]
 }
 
+// FindBySessionID looks up a run by its SessionID or ProcessID.
+// Returns nil if not found. Uses linear scan — run count is typically small.
+func (s *Store) FindBySessionID(sid types.SessionID) *Run {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.runs {
+		if r.SessionID == sid || r.ProcessID == sid {
+			cp := *r
+			cp.Metadata = make(map[string]string, len(r.Metadata))
+			for k, v := range r.Metadata {
+				cp.Metadata[k] = v
+			}
+			return &cp
+		}
+	}
+	return nil
+}
+
 // List returns all runs, optionally filtered.
 // All filter fields are AND-ed; zero values mean "no filter".
 func (s *Store) List(kind, pluginID, state string) []*Run {
