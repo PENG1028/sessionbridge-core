@@ -1,43 +1,21 @@
 builds:
-  - id: sessionnode
-    main: ./cmd/node
+  - main: ./cmd/node
     binary: sessionnode
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.Version={{.Version}}
+      - -s -w
     env:
       - CGO_ENABLED=0
 
-  - id: sessionnode-win
-    main: ./cmd/node
-    binary: sessionnode
-    goos:
-      - windows
-    goarch:
-      - amd64
-    ldflags:
-      - -s -w -X main.Version={{.Version}}
-
 archives:
   - format: tar.gz
-    name_template: >-
-      sessionbridge-core_
-      {{ .Version }}_
-      {{- .Os }}_
-      {{- .Arch }}
+    name_template: "sessionbridge-core_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
-  name_template: 'checksums.txt'
-
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^ci:'
+  name_template: "checksums.txt"
