@@ -14,7 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/creack/pty"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // unixPTYDriver implements PTYDriver for Unix platforms (Linux/macOS)

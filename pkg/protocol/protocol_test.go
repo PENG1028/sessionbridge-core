@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func TestMessageConstants(t *testing.T) {

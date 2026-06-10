@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/testutil"
+	"github.com/PENG1028/sessionbridge-core/internal/testutil"
 )
 
 // TestSpawn_ProcessGroup verifies that spawned processes get their own

@@ -3,7 +3,7 @@ package protocol
 import (
 	"encoding/json"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // MarshalJSON serializes the message. Exists as an explicit method to allow

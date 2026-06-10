@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/history"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/history"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // --- session.history.getPolicy ---

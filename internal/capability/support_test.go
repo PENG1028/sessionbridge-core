@@ -3,7 +3,7 @@ package capability
 import (
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/platform"
+	"github.com/PENG1028/sessionbridge-core/internal/platform"
 )
 
 func desktop() platform.RuntimePlatform {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/testutil"
+	"github.com/PENG1028/sessionbridge-core/internal/testutil"
 )
 
 // TestRunAndProcessList_CrossReference verifies that:

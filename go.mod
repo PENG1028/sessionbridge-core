@@ -1,4 +1,4 @@
-module github.com/user/sessionnode/go-core
+module github.com/PENG1028/sessionbridge-core
 
 go 1.21
 

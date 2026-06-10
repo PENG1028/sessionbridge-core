@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // MemPolicyStore is an in-memory policy store that maps plugin capabilities to grants.

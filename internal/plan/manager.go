@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // DefaultHighRiskCaps is the default set of capabilities that require Plan Before Apply.

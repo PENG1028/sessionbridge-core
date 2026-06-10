@@ -3,8 +3,8 @@ package executor
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/internal/notify"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/notify"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // notifySendPayload is the expected JSON payload for "notify.send".

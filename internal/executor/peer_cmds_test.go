@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/config"
-	"github.com/user/sessionnode/go-core/internal/mesh"
+	"github.com/PENG1028/sessionbridge-core/internal/config"
+	"github.com/PENG1028/sessionbridge-core/internal/mesh"
 )
 
 // configurableNodeLister lets tests specify which nodes the topology returns.

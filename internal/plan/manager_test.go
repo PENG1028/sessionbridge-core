@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func TestManager_RequiresPlan_HighRisk(t *testing.T) {

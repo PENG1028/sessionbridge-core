@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/user/sessionnode/go-core/internal/config"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/config"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 type configGetPayload struct {

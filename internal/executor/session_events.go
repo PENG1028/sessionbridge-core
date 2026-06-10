@@ -3,7 +3,7 @@ package executor
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // sessionGet returns detailed session info (like session.info but may include more).

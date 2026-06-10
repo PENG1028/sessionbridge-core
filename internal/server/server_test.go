@@ -10,17 +10,17 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/user/sessionnode/go-core/internal/auth"
-	"github.com/user/sessionnode/go-core/internal/dispatcher"
-	"github.com/user/sessionnode/go-core/internal/executor"
-	"github.com/user/sessionnode/go-core/internal/history"
-	"github.com/user/sessionnode/go-core/internal/permission"
-	"github.com/user/sessionnode/go-core/internal/process"
-	"github.com/user/sessionnode/go-core/internal/run"
-	"github.com/user/sessionnode/go-core/internal/session"
-	"github.com/user/sessionnode/go-core/internal/wsconn"
-	"github.com/user/sessionnode/go-core/pkg/protocol"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/auth"
+	"github.com/PENG1028/sessionbridge-core/internal/dispatcher"
+	"github.com/PENG1028/sessionbridge-core/internal/executor"
+	"github.com/PENG1028/sessionbridge-core/internal/history"
+	"github.com/PENG1028/sessionbridge-core/internal/permission"
+	"github.com/PENG1028/sessionbridge-core/internal/process"
+	"github.com/PENG1028/sessionbridge-core/internal/run"
+	"github.com/PENG1028/sessionbridge-core/internal/session"
+	"github.com/PENG1028/sessionbridge-core/internal/wsconn"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func testServer(t *testing.T) (*Server, *httptest.Server) {

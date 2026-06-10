@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/protocol"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // Connection represents a single WebSocket client with its actor identity.

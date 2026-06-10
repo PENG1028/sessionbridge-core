@@ -22,11 +22,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/user/sessionnode/go-core/internal/dispatcher"
-	"github.com/user/sessionnode/go-core/internal/executor"
-	"github.com/user/sessionnode/go-core/internal/mesh"
-	"github.com/user/sessionnode/go-core/pkg/protocol"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/dispatcher"
+	"github.com/PENG1028/sessionbridge-core/internal/executor"
+	"github.com/PENG1028/sessionbridge-core/internal/mesh"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // --- Configuration ---

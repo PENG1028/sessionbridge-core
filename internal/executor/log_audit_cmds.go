@@ -1,8 +1,8 @@
 package executor
 
 import (
-	"github.com/user/sessionnode/go-core/internal/logs"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/logs"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // ─── logs.tail ───────────────────────────────────────────────────────────────

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/testutil"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/testutil"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // testRecorder collects pushed chunks and events for verification.

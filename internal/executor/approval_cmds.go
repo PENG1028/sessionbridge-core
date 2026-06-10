@@ -1,7 +1,7 @@
 package executor
 
 import (
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // approvalList returns pending approval requests from the notifier.

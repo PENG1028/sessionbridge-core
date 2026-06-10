@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/user/sessionnode/go-core/pkg/protocol"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 type testCase struct {

@@ -3,7 +3,7 @@ package executor
 import (
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/logs"
+	"github.com/PENG1028/sessionbridge-core/internal/logs"
 )
 
 func TestLogsTail_EmptyPayload(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/mesh"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/mesh"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // ---- payload types ----

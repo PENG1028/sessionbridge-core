@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func systemInfo(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {

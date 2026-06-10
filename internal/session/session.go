@@ -3,7 +3,7 @@ package session
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // DefaultHistoryPolicy is the safe default applied when no policy is provided.

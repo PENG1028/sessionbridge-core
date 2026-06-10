@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func TestStore_Create(t *testing.T) {

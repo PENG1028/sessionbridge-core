@@ -8,7 +8,7 @@
 // Core does not interpret metadata — callers provide it, core stores it.
 package run
 
-import "github.com/user/sessionnode/go-core/pkg/types"
+import "github.com/PENG1028/sessionbridge-core/pkg/types"
 
 // Kind constants for the types of long-lived resources a run represents.
 const (

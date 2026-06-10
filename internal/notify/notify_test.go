@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
 )
 
 // capturePush creates a Manager that records all pushed messages into the returned slice.

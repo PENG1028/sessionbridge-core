@@ -4,7 +4,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // TokenAuthenticator validates actor credentials using a shared secret.

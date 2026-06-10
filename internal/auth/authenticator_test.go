@@ -3,7 +3,7 @@ package auth
 import (
 	"testing"
 
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func TestAuthenticator_DevMode(t *testing.T) {

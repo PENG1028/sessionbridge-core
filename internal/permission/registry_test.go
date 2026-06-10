@@ -3,8 +3,8 @@ package permission
 import (
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/capability"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/capability"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 func TestMapRegistry_HasCapability(t *testing.T) {

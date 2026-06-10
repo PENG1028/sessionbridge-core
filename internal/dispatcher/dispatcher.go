@@ -3,8 +3,8 @@ package dispatcher
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/pkg/protocol"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // --- Interfaces (consumer-defined — Go idiom) ---

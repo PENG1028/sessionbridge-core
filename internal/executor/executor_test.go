@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/user/sessionnode/go-core/internal/process"
-	"github.com/user/sessionnode/go-core/internal/run"
-	"github.com/user/sessionnode/go-core/internal/session"
-	"github.com/user/sessionnode/go-core/internal/task"
-	"github.com/user/sessionnode/go-core/internal/testutil"
-	"github.com/user/sessionnode/go-core/internal/wsconn"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/process"
+	"github.com/PENG1028/sessionbridge-core/internal/run"
+	"github.com/PENG1028/sessionbridge-core/internal/session"
+	"github.com/PENG1028/sessionbridge-core/internal/task"
+	"github.com/PENG1028/sessionbridge-core/internal/testutil"
+	"github.com/PENG1028/sessionbridge-core/internal/wsconn"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // ---------------------------------------------------------------------------

@@ -3,9 +3,9 @@ package executor
 import (
 	"fmt"
 
-	"github.com/user/sessionnode/go-core/internal/run"
-	"github.com/user/sessionnode/go-core/internal/update"
-	"github.com/user/sessionnode/go-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/run"
+	"github.com/PENG1028/sessionbridge-core/internal/update"
+	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
 // ── update.status ────────────────────────────────────────────────────────

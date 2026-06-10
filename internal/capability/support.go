@@ -1,6 +1,6 @@
 package capability
 
-import "github.com/user/sessionnode/go-core/internal/platform"
+import "github.com/PENG1028/sessionbridge-core/internal/platform"
 
 // SupportLevel describes the degree of support for a capability on a platform.
 type SupportLevel string

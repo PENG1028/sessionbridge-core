@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/user/sessionnode/go-core/internal/testutil"
+	"github.com/PENG1028/sessionbridge-core/internal/testutil"
 )
 
 // ─── Contract Tests ─────────────────────────────────────────────────
