@@ -191,7 +191,7 @@ func (m *Manager) SpawnPTY(command string, args []string, cwd string, cols, rows
 // setRaw disables echo, canonical mode, and signal processing on a terminal fd.
 func setRaw(fd uintptr) error {
 	var termios syscall.Termios
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(&termios))); errno != 0 {
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, ioctlTCGETS, uintptr(unsafe.Pointer(&termios))); errno != 0 {
 		return errno
 	}
 	termios.Iflag &^= syscall.BRKINT | syscall.ICRNL | syscall.INPCK | syscall.ISTRIP | syscall.IXON
@@ -201,7 +201,7 @@ func setRaw(fd uintptr) error {
 	termios.Oflag |= syscall.ONLCR
 	termios.Cc[syscall.VMIN] = 1
 	termios.Cc[syscall.VTIME] = 0
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(&termios)))
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, ioctlTCSETS, uintptr(unsafe.Pointer(&termios)))
 	if errno != 0 {
 		return errno
 	}
