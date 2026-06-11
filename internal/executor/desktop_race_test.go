@@ -93,8 +93,9 @@ func TestRace_ClipboardSet_Concurrent(t *testing.T) {
 // TestRace_Screenshot_SequentialParallel tests multiple screenshots in parallel.
 func TestRace_Screenshot_SequentialParallel(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("screenshot race: only run on Windows (GUI required)")
+		t.Skip("screenshot race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -129,8 +130,9 @@ func TestRace_Screenshot_SequentialParallel(t *testing.T) {
 // TestRace_DesktopClick_Concurrent tests concurrent click operations.
 func TestRace_DesktopClick_Concurrent(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.click race: only run on Windows (GUI required)")
+		t.Skip("desktop.click race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -157,8 +159,9 @@ func TestRace_DesktopClick_Concurrent(t *testing.T) {
 // TestRace_DesktopType_Concurrent tests concurrent text typing.
 func TestRace_DesktopType_Concurrent(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.type race: only run on Windows (GUI required)")
+		t.Skip("desktop.type race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -184,8 +187,9 @@ func TestRace_DesktopType_Concurrent(t *testing.T) {
 // TestRace_InputKeyboard_Concurrent tests concurrent keystrokes.
 func TestRace_InputKeyboard_Concurrent(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.keyboard race: only run on Windows (GUI required)")
+		t.Skip("input.keyboard race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -213,8 +217,9 @@ func TestRace_InputKeyboard_Concurrent(t *testing.T) {
 // TestRace_InputMouse_Concurrent tests concurrent mouse operations.
 func TestRace_InputMouse_Concurrent(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.mouse race: only run on Windows (GUI required)")
+		t.Skip("input.mouse race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -252,8 +257,9 @@ func TestRace_InputMouse_Concurrent(t *testing.T) {
 // TestRace_MixedDesktopCaps_Concurrent tests all 7 capabilities concurrently.
 func TestRace_MixedDesktopCaps_Concurrent(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("mixed desktop caps race: only run on Windows (GUI required)")
+		t.Skip("mixed desktop caps race: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 

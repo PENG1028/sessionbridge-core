@@ -2,10 +2,21 @@ package executor
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+// skipUnlessGUI skips the test unless SB_DESKTOP_GUI_TEST=1 is set.
+// GUI-manipulating tests (click, type, keyboard, mouse, screenshot) can
+// disrupt the developer's desktop, so they are opt-in only.
+func skipUnlessGUI(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SB_DESKTOP_GUI_TEST") != "1" {
+		t.Skip("skipping GUI-interfering test (set SB_DESKTOP_GUI_TEST=1 to run)")
+	}
+}
 
 // ─── Fuzz / Boundary Tests for Desktop Capabilities ─────────────────────
 //
@@ -254,6 +265,7 @@ func TestFuzz_Screenshot_StringMonitorIndex(t *testing.T) {
 
 // TestFuzz_DesktopClick_ZeroCoordinates verifies click at (0,0) is accepted.
 func TestFuzz_DesktopClick_ZeroCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", map[string]interface{}{
@@ -267,6 +279,7 @@ func TestFuzz_DesktopClick_ZeroCoordinates(t *testing.T) {
 
 // TestFuzz_DesktopClick_NegativeCoordinates verifies click with negative coordinates.
 func TestFuzz_DesktopClick_NegativeCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -295,6 +308,7 @@ func TestFuzz_DesktopClick_NegativeCoordinates(t *testing.T) {
 
 // TestFuzz_DesktopClick_LargeCoordinates verifies click with very large coordinates.
 func TestFuzz_DesktopClick_LargeCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", map[string]interface{}{
@@ -308,6 +322,7 @@ func TestFuzz_DesktopClick_LargeCoordinates(t *testing.T) {
 
 // TestFuzz_DesktopClick_InvalidButton tests desktop.click with invalid button names.
 func TestFuzz_DesktopClick_InvalidButton(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -326,6 +341,7 @@ func TestFuzz_DesktopClick_InvalidButton(t *testing.T) {
 
 // TestFuzz_DesktopClick_NilPayload verifies desktop.click defaults x,y to 0 with nil payload.
 func TestFuzz_DesktopClick_NilPayload(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", nil))
@@ -339,6 +355,7 @@ func TestFuzz_DesktopClick_NilPayload(t *testing.T) {
 
 // TestFuzz_DesktopClick_StringCoordinates tests type coercion for coordinates.
 func TestFuzz_DesktopClick_StringCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", map[string]interface{}{
@@ -371,8 +388,9 @@ func TestFuzz_DesktopType_EmptyText(t *testing.T) {
 // TestFuzz_DesktopType_Unicode tests desktop.type with various Unicode text.
 func TestFuzz_DesktopType_Unicode(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.type unicode: only run on Windows (GUI required)")
+		t.Skip("desktop.type unicode: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -403,8 +421,9 @@ func TestFuzz_DesktopType_Unicode(t *testing.T) {
 // TestFuzz_DesktopType_LongString tests desktop.type with long strings.
 func TestFuzz_DesktopType_LongString(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.type: only run on Windows (GUI required)")
+		t.Skip("desktop.type: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -450,8 +469,9 @@ func TestFuzz_InputKeyboard_EmptyKeys(t *testing.T) {
 // TestFuzz_InputKeyboard_SpecialKeyNames tests various key name spellings.
 func TestFuzz_InputKeyboard_SpecialKeyNames(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.keyboard: only run on Windows (GUI required)")
+		t.Skip("input.keyboard: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -504,6 +524,7 @@ func TestFuzz_InputKeyboard_UnknownKey(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("input.keyboard unknown key: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -573,6 +594,7 @@ func TestFuzz_InputKeyboard_TypeFieldMismatch(t *testing.T) {
 
 // TestFuzz_InputMouse_ZeroCoordinates verifies mouse ops at (0,0).
 func TestFuzz_InputMouse_ZeroCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -588,6 +610,7 @@ func TestFuzz_InputMouse_ZeroCoordinates(t *testing.T) {
 
 // TestFuzz_InputMouse_NegativeCoordinates verifies mouse with negative coordinates.
 func TestFuzz_InputMouse_NegativeCoordinates(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -622,6 +645,7 @@ func TestFuzz_InputMouse_InvalidButton(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("input.mouse invalid button: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -641,6 +665,7 @@ func TestFuzz_InputMouse_ScrollValues(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("input.mouse scroll: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 

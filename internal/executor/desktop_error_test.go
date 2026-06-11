@@ -159,6 +159,7 @@ func TestError_Screenshot_NegativeMonitorIndex(t *testing.T) {
 
 // TestError_DesktopClick_NilPayload verifies desktop.click defaults x,y to 0 with nil payload.
 func TestError_DesktopClick_NilPayload(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", nil))
@@ -171,6 +172,7 @@ func TestError_DesktopClick_NilPayload(t *testing.T) {
 
 // TestError_DesktopClick_EmptyPayload verifies desktop.click defaults x,y to 0 with empty payload.
 func TestError_DesktopClick_EmptyPayload(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", map[string]interface{}{}))
@@ -182,6 +184,7 @@ func TestError_DesktopClick_EmptyPayload(t *testing.T) {
 
 // TestError_DesktopClick_OnlyXProvided checks missing y coordinate.
 func TestError_DesktopClick_OnlyXProvided(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	// Only x, no y — y defaults to 0, which is technically valid
@@ -195,6 +198,7 @@ func TestError_DesktopClick_OnlyXProvided(t *testing.T) {
 
 // TestError_DesktopClick_CrossPlatform verifies desktop.click errors are consistent across platforms.
 func TestError_DesktopClick_CrossPlatform(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 	_, err := r.Execute(req("desktop.click", nil))
@@ -388,6 +392,7 @@ func TestError_InputMouse_NilPayload(t *testing.T) {
 
 // TestError_InputMouse_InvalidAction validates error messages for bad actions.
 func TestError_InputMouse_InvalidAction(t *testing.T) {
+	skipUnlessGUI(t)
 	deps := testDeps(t)
 	r := New(deps)
 
@@ -424,6 +429,7 @@ func TestError_InputMouse_InvalidAction(t *testing.T) {
 
 // TestError_InputMouse_MissingAction verifies default action behavior.
 func TestError_InputMouse_MissingAction(t *testing.T) {
+	// Missing action defaults to "" which errors before any mouse movement — safe
 	deps := testDeps(t)
 	r := New(deps)
 	// Missing action defaults to empty string, which is invalid for all platforms

@@ -85,8 +85,9 @@ func TestContract_DesktopClickPayloadValidation(t *testing.T) {
 // TestContract_DesktopClickShape validates successful click response.
 func TestContract_DesktopClickShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.click contract: only run on Windows (GUI required)")
+		t.Skip("desktop.click contract: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -129,8 +130,9 @@ func TestContract_DesktopTypePayloadValidation(t *testing.T) {
 // TestContract_DesktopTypeShape validates successful type response.
 func TestContract_DesktopTypeShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.type contract: only run on Windows (GUI required)")
+		t.Skip("desktop.type contract: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -173,8 +175,9 @@ func TestContract_InputKeyboardPayloadValidation(t *testing.T) {
 // TestContract_InputKeyboardShape validates keyboard response.
 func TestContract_InputKeyboardShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.keyboard contract: only run on Windows (GUI required)")
+		t.Skip("input.keyboard contract: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)
@@ -206,8 +209,9 @@ func TestContract_InputMousePayloadValidation(t *testing.T) {
 // TestContract_InputMouseShape validates mouse response.
 func TestContract_InputMouseShape(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.mouse contract: only run on Windows (GUI required)")
+		t.Skip("input.mouse contract: only run on Windows")
 	}
+	skipUnlessGUI(t)
 
 	deps := testDeps(t)
 	r := New(deps)

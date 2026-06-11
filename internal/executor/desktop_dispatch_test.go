@@ -316,8 +316,9 @@ func TestDispatch_Screenshot_Success(t *testing.T) {
 // TestDispatch_DesktopClick_Success tests desktop.click through dispatch.
 func TestDispatch_DesktopClick_Success(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.click dispatch: only run on Windows (GUI required)")
+		t.Skip("desktop.click dispatch: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	d, audit, _ := testDepsWithDispatcher(t)
 
 	resp := d.Dispatch(makeDesktopReq("desktop.click", map[string]interface{}{
@@ -344,8 +345,9 @@ func TestDispatch_DesktopClick_Success(t *testing.T) {
 // TestDispatch_DesktopType_Success tests desktop.type through dispatch.
 func TestDispatch_DesktopType_Success(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("desktop.type dispatch: only run on Windows (GUI required)")
+		t.Skip("desktop.type dispatch: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	d, audit, _ := testDepsWithDispatcher(t)
 
 	resp := d.Dispatch(makeDesktopReq("desktop.type", map[string]interface{}{
@@ -368,8 +370,9 @@ func TestDispatch_DesktopType_Success(t *testing.T) {
 // TestDispatch_InputKeyboard_Success tests input.keyboard through dispatch.
 func TestDispatch_InputKeyboard_Success(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.keyboard dispatch: only run on Windows (GUI required)")
+		t.Skip("input.keyboard dispatch: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	d, audit, _ := testDepsWithDispatcher(t)
 
 	resp := d.Dispatch(makeDesktopReq("input.keyboard", map[string]interface{}{
@@ -393,8 +396,9 @@ func TestDispatch_InputKeyboard_Success(t *testing.T) {
 // TestDispatch_InputMouse_Success tests input.mouse through dispatch.
 func TestDispatch_InputMouse_Success(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("input.mouse dispatch: only run on Windows (GUI required)")
+		t.Skip("input.mouse dispatch: only run on Windows")
 	}
+	skipUnlessGUI(t)
 	d, audit, _ := testDepsWithDispatcher(t)
 
 	resp := d.Dispatch(makeDesktopReq("input.mouse", map[string]interface{}{
