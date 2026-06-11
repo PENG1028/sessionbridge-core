@@ -51,6 +51,17 @@ type CoreConfig struct {
 	DataDir    string     `json:"dataDir"` // default "~/.sessionnode"
 	Auth       AuthConfig `json:"auth"`
 	Log        LogConfig  `json:"log"`
+	Storage    StorageConfig `json:"storage,omitempty"`
+}
+
+// StorageConfig controls disk usage for OpLog and ContentStore.
+type StorageConfig struct {
+	// OpLogMaxRecords is the max operations retained before truncation.
+	// Default: 100000. 0 = unlimited.
+	OpLogMaxRecords int `json:"opLogMaxRecords,omitempty"`
+	// ContentMaxSizeMB is the max MB for ContentStore blobs.
+	// Default: 0 (unlimited). When exceeded, oldest unreferenced blobs are GC'd.
+	ContentMaxSizeMB int `json:"contentMaxSizeMB,omitempty"`
 }
 
 // TLSConfig holds optional TLS certificate paths.

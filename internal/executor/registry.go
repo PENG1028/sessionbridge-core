@@ -82,7 +82,8 @@ type Deps struct {
 	// AuditStore is the in-memory store for audit.list.
 	// When nil, audit.list returns empty results.
 	AuditStore *logs.AuditStore
-	// OpLog is the persistent operation log for restart recovery.
+	// OpLog is the persistent operation log for restart recovery and audit queries.
+	// When set, audit.list queries from OpLog instead of AuditStore.
 	OpLog *oplog.Store
 	// RollbackEngine provides rollback/dry-run/verify for logged operations.
 	RollbackEngine *oplog.RollbackEngine
@@ -97,6 +98,22 @@ type Deps struct {
 	Topology TopologyManager
 }
 
+// RegistryConfig controls which capability groups are registered.
+// Build-time composition — different products (standalone/hub/leaf) get different sets.
+type RegistryConfig struct {
+	Process  bool // process.spawn/signal/resize/list
+	Update   bool // update.check/plan/status
+	Network  bool // network.* (not yet implemented)
+	Sync     bool // sync.diff/apply (not yet implemented)
+	Admin    bool // admin.* (not yet implemented)
+}
+
+// DefaultRegistryConfig enables all capability groups.
+var DefaultRegistryConfig = RegistryConfig{
+	Process: true,
+	Update:  true,
+}
+
 // Registry maps capability names to handler functions.
 // Implements the dispatcher.Executor interface.
 type Registry struct {
@@ -104,13 +121,20 @@ type Registry struct {
 	deps     *Deps
 }
 
-// New creates a Registry with all built-in capability handlers registered.
+// New creates a Registry with all built-in capability handlers
+// registered using DefaultRegistryConfig.
 func New(deps *Deps) *Registry {
+	return NewWithConfig(deps, DefaultRegistryConfig)
+}
+
+// NewWithConfig creates a Registry with capability groups controlled by cfg.
+func NewWithConfig(deps *Deps, cfg RegistryConfig) *Registry {
 	r := &Registry{
 		handlers: make(map[string]ExecFunc),
 		deps:     deps,
 	}
-	r.registerDefaults()
+	r.registerCore()
+	r.registerConditional(cfg)
 	return r
 }
 
@@ -167,7 +191,6 @@ func (r *Registry) recordLog(req *types.CapabilityRequest, level, msg string) {
 	})
 }
 
-
 func extractSessionIDFromPayload(payload json.RawMessage) string {
 	if len(payload) == 0 {
 		return ""
@@ -187,75 +210,79 @@ func (r *Registry) Register(capability string, fn ExecFunc) {
 	r.handlers[capability] = fn
 }
 
-func (r *Registry) registerDefaults() {
+// registerCore registers capabilities that are always available.
+func (r *Registry) registerCore() {
+	// Session
 	r.Register("session.create", sessionCreate)
 	r.Register("session.destroy", sessionDestroy)
 	r.Register("session.list", sessionList)
 	r.Register("session.info", sessionInfo)
+	r.Register("session.get", sessionGet)
 
+	// Stream
 	r.Register("stream.subscribe", streamSubscribe)
 	r.Register("stream.write", streamWrite)
 	r.Register("stream.list", streamList)
+	r.Register("stream.replay", streamReplay)
+	r.Register("stream.tail", streamTail)
 
+	// Filesystem
 	r.Register("fs.read", fsRead)
 	r.Register("fs.write", fsWrite)
 	r.Register("fs.list", fsList)
 	r.Register("fs.mkdir", fsMkdir)
 	r.Register("fs.remove", fsRemove)
 	r.Register("fs.rename", fsRename)
+	r.Register("fs.stat", fsStat)
 
-	r.Register("process.spawn", processSpawn)
-	r.Register("process.signal", processSignal)
-	r.Register("process.resize", processResize)
-	r.Register("process.list", processList)
-
+	// Env
 	r.Register("env.get", envGet)
 	r.Register("env.set", envSet)
 	r.Register("env.list", envList)
 	r.Register("env.unset", envUnset)
+	r.Register("env.checkBinary", envCheckBinary)
+	r.Register("env.which", envWhich)
+	r.Register("env.home", envHome)
+	r.Register("env.cwd", envCwd)
 
+	// Config
 	r.Register("config.list", configList)
 	r.Register("config.get", configGet)
 	r.Register("config.set", configSet)
 	r.Register("config.reset", configReset)
 
+	// System
 	r.Register("system.info", systemInfo)
 
+	// Node
 	r.Register("node.list", nodeList)
 	r.Register("node.info", nodeInfo)
 	r.Register("node.health", nodeHealth)
 
-	r.Register("session.get", sessionGet)
-
-	r.Register("fs.stat", fsStat)
-
-	r.Register("env.checkBinary", envCheckBinary)
-	r.Register("env.which", envWhich)
-	r.Register("env.home", envHome)
-	r.Register("env.cwd", envCwd)
+	// Notify & Approval
 	r.Register("notify.send", notifySend)
 	r.Register("notify.request", notifyRequest)
 	r.Register("notify.respond", notifyRespond)
-
 	r.Register("approval.list", approvalList)
 
-	// History & Replay
+	// History
 	r.Register("session.history.getPolicy", historyGetPolicy)
 	r.Register("session.history.setPolicy", historySetPolicy)
 	r.Register("session.history.stats", historyStats)
 	r.Register("session.history.list", historyList)
 	r.Register("session.history.clear.plan", historyClearPlan)
 	r.Register("session.history.clear.execute", historyClearExecute)
-	r.Register("stream.replay", streamReplay)
-	r.Register("stream.tail", streamTail)
 
+	// Observability
 	r.Register("logs.tail", logsTail)
 	r.Register("logs.query", logsQuery)
 	r.Register("audit.list", auditList)
 
+	// Task
 	r.Register("task.list", taskList)
 	r.Register("task.info", taskInfo)
 
+	// Run
 	r.Register("run.create", runCreate)
 	r.Register("run.list", runList)
 	r.Register("run.info", runInfo)
@@ -263,35 +290,44 @@ func (r *Registry) registerDefaults() {
 	r.Register("run.updatePolicy", runUpdatePolicy)
 	r.Register("run.attach", runAttach)
 
+	// Peer & Mesh
 	r.Register("node.peer.list", nodePeerList)
 	r.Register("node.peer.info", nodePeerInfo)
 	r.Register("node.peer.reconnect", nodePeerReconnect)
 	r.Register("node.peer.disconnect", nodePeerDisconnect)
 	r.Register("node.peer.revoke", nodePeerRevoke)
 	r.Register("node.reachability.check", nodeReachabilityCheck)
-
-	// Mesh: identity & invite
 	r.Register("node.identity.get", nodeIdentityGet)
 	r.Register("node.invite.create", nodeInviteCreate)
 	r.Register("node.invite.list", nodeInviteList)
 	r.Register("node.invite.revoke", nodeInviteRevoke)
 	r.Register("node.invite.accept", nodeInviteAccept)
 
-	// Update — self-update status and planning baseline
-	r.Register("update.status", updateStatus)
-	r.Register("update.source.get", updateSourceGet)
-	r.Register("update.source.set", updateSourceSet)
-	r.Register("update.policy.get", updatePolicyGet)
-	r.Register("update.policy.set", updatePolicySet)
-	r.Register("update.check", updateCheck)
-	r.Register("update.plan", updatePlan)
-	r.Register("update.ignore", updateIgnore)
-
-	// Operation Log — query, rollback, verify
+	// Operation Log
 	r.Register("operations.list", operationsList)
 	r.Register("operations.get", operationsGet)
 	r.Register("operations.dryRun", operationsDryRun)
 	r.Register("operations.rollback", operationsRollback)
 	r.Register("operations.rollbackRange", operationsRollbackRange)
 	r.Register("operations.verify", operationsVerify)
+}
+
+// registerConditional registers capabilities based on RegistryConfig flags.
+func (r *Registry) registerConditional(cfg RegistryConfig) {
+	if cfg.Process {
+		r.Register("process.spawn", processSpawn)
+		r.Register("process.signal", processSignal)
+		r.Register("process.resize", processResize)
+		r.Register("process.list", processList)
+	}
+	if cfg.Update {
+		r.Register("update.status", updateStatus)
+		r.Register("update.source.get", updateSourceGet)
+		r.Register("update.source.set", updateSourceSet)
+		r.Register("update.policy.get", updatePolicyGet)
+		r.Register("update.policy.set", updatePolicySet)
+		r.Register("update.check", updateCheck)
+		r.Register("update.plan", updatePlan)
+		r.Register("update.ignore", updateIgnore)
+	}
 }

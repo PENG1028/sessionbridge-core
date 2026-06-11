@@ -248,7 +248,13 @@ func main() {
 		LogBuffer:  logBuffer,
 		AuditStore: auditStore,
 	}
-	execReg := executor.New(execDeps)
+	// Registry config — hub mode disables process/update capabilities
+	regCfg := executor.DefaultRegistryConfig
+	if isHub {
+		regCfg.Process = false
+		regCfg.Update = false
+	}
+	execReg := executor.NewWithConfig(execDeps, regCfg)
 
 	// Dispatcher
 	d := dispatcher.New(

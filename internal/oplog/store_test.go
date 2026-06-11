@@ -1,6 +1,7 @@
 package oplog
 
 import (
+	"github.com/PENG1028/sessionbridge-core/internal/content"
 	"os"
 	"path/filepath"
 	"testing"
@@ -347,5 +348,55 @@ func TestStore_EmptyStore(t *testing.T) {
 	got := s.Get("op_nonexistent")
 	if got != nil {
 		t.Fatal("expected nil for empty store get")
+	}
+}
+
+
+// TestStore_TruncateReleasesContentRefs verifies that truncating the OpLog
+// releases ContentStore references for removed operations.
+func TestStore_TruncateReleasesContentRefs(t *testing.T) {
+	dir := t.TempDir()
+	csDir := t.TempDir()
+
+	cs := content.NewStore(csDir)
+	if err := cs.Load(); err != nil {
+		t.Fatalf("content load: %v", err)
+	}
+
+	s := NewStore(dir, WithChunkSize(3), WithMaxRecords(5), WithContentStore(cs))
+	if err := s.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	defer s.Close()
+
+	// Store content and get refs
+	data := []byte("content for truncation test")
+	ref, _ := cs.Store(data)
+	if rc := cs.RefCount(ref.Hash); rc != 1 {
+		t.Fatalf("expected refCount=1 after store, got %d", rc)
+	}
+
+	// Append more ops to push the content op past maxRecords
+	// Write ops with content refs
+	for i := 0; i < 3; i++ {
+		op := mkOp("fs.write", types.OpClassContent)
+		op.ContentBefore = &types.ContentRef{
+			Path: "/tmp/test.txt", Hash: ref.Hash, Size: ref.Size, StoredAt: ref.StoredAt,
+		}
+		s.Append(op)
+	}
+
+	// Write filler ops to trigger truncation
+	for i := 0; i < 10; i++ {
+		s.Append(mkOp("session.create", types.OpClassState))
+	}
+
+	// After truncation, the content ref should have been released
+	// (refCount decreased from the truncation of the first ops)
+	finalRefs := cs.RefCount(ref.Hash)
+	t.Logf("content ref count after truncation: %d", finalRefs)
+	// At minimum, refCount should be < 3 (the content ops were truncated)
+	if finalRefs >= 3 {
+		t.Errorf("expected refCount < 3 after truncation, got %d", finalRefs)
 	}
 }

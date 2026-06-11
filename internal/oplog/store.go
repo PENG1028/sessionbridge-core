@@ -18,6 +18,7 @@ package oplog
 import (
 	"bufio"
 	"encoding/json"
+	"github.com/PENG1028/sessionbridge-core/internal/content"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -66,6 +67,10 @@ type Store struct {
 	byID   map[types.OpID]*operationMeta
 	byTime []*operationMeta // ordered by timestamp (for truncation and replay)
 	total  int              // total operations across all chunks
+
+	// Content is the content store for blob references.
+	// When set, truncation releases ContentStore refs for removed ops.
+	Content *content.Store
 }
 
 // StoreOption configures the Store.
@@ -102,6 +107,14 @@ func NewStore(dir string, opts ...StoreOption) *Store {
 		opt(s)
 	}
 	return s
+}
+
+// WithContentStore sets the Content Store for blob reference tracking.
+// When set, OpLog truncation releases content references automatically.
+func WithContentStore(cs *content.Store) StoreOption {
+	return func(s *Store) {
+		s.Content = cs
+	}
 }
 
 // Load scans the chunk files on disk and rebuilds the in-memory index.
@@ -401,6 +414,28 @@ func (s *Store) readOp(meta *operationMeta) (*types.Operation, error) {
 	return nil, fmt.Errorf("oplog: operation %s not found at chunk %d seq %d", meta.OpID, meta.ChunkNo, meta.Seq)
 }
 
+func (s *Store) readOpFromDisk(meta *operationMeta) *types.Operation {
+	path := chunkFilePath(s.baseDir, meta.ChunkNo)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	line := 0
+	for scanner.Scan() {
+		if line == meta.Seq {
+			var op types.Operation
+			if err := json.Unmarshal(scanner.Bytes(), &op); err != nil {
+				return nil
+			}
+			return &op
+		}
+		line++
+	}
+	return nil
+}
+
 func (s *Store) truncateLocked() {
 	if s.total <= s.maxRecords {
 		return
@@ -458,6 +493,20 @@ func (s *Store) truncateLocked() {
 	}
 	s.byTime = keep
 	s.total = len(s.byTime)
+
+	// Release ContentStore references for removed operations
+	if s.Content != nil {
+		for _, meta := range s.byTime {
+			for _, cn := range removeChunks {
+				if meta.ChunkNo == cn {
+					if op := s.readOpFromDisk(meta); op != nil && op.ContentBefore != nil {
+						s.Content.Release(op.ContentBefore.Hash)
+					}
+					break
+				}
+			}
+		}
+	}
 
 	// Delete chunk files from disk
 	for _, cn := range removeChunks {
