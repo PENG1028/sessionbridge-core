@@ -15,11 +15,16 @@ import (
 
 // UpdateSource describes where to check for updates.
 type UpdateSource struct {
-	Type    string `json:"type"`    // "git" (only supported type in this round)
-	Remote  string `json:"remote"`  // default "origin"
-	Branch  string `json:"branch"`  // default "main"
+	Type    string `json:"type"`    // "git" or "release"
+	Remote  string `json:"remote"`  // default "origin" (git only)
+	Branch  string `json:"branch"`  // default "main" (git only)
 	RepoURL string `json:"repoUrl"` // remote fetch URL (required for git)
 	Mode    string `json:"mode"`    // "manual" or "auto-check"
+
+	// Release source fields (type="release")
+	ReleaseRepo     string `json:"releaseRepo,omitempty"`     // "PENG1028/sessionbridge-core"
+	ReleaseCurrent  string `json:"releaseCurrent,omitempty"`  // "v0.8.0" — current version
+	ReleaseAsset    string `json:"releaseAsset,omitempty"`    // asset name template
 }
 
 // DefaultSource returns the safe-default update source.
@@ -34,8 +39,17 @@ func DefaultSource() UpdateSource {
 
 // ValidateSource returns an error string if the source is invalid.
 func ValidateSource(s UpdateSource) string {
+	if s.Type == "release" {
+		if s.ReleaseRepo == "" {
+			return "releaseRepo is required for release source"
+		}
+		if s.Mode != "" && s.Mode != "manual" && s.Mode != "auto-check" {
+			return "unsupported mode: " + s.Mode + " (must be 'manual' or 'auto-check')"
+		}
+		return ""
+	}
 	if s.Type != "git" {
-		return "unsupported source type: " + s.Type + " (only 'git' is supported)"
+		return "unsupported source type: " + s.Type + " (only 'git' or 'release' are supported)"
 	}
 	if s.Mode != "" && s.Mode != "manual" && s.Mode != "auto-check" {
 		return "unsupported mode: " + s.Mode + " (must be 'manual' or 'auto-check')"

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/PENG1028/sessionbridge-core/internal/run"
 	"github.com/PENG1028/sessionbridge-core/internal/update"
@@ -192,6 +193,11 @@ func updateCheck(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 	}
 
 	src := deps.UpdateManager.Source()
+
+	if src.Type == "release" {
+		return updateCheckRelease(deps, src)
+	}
+
 	if src.Type != "git" {
 		return nil, fmt.Errorf("unsupported source type: %s", src.Type)
 	}
@@ -239,8 +245,6 @@ func updateCheck(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 	}
 
 	// Determine status by comparing local HEAD vs remote HEAD directly.
-	// behindBy is kept for display compatibility but is 1 when behind, 0 otherwise
-	// since we no longer compute an exact count (that requires fetch + rev-list).
 	behindBy := 0
 	st := update.UpdateStatus{
 		Status:        update.StatusUpToDate,
@@ -255,7 +259,6 @@ func updateCheck(req *types.CapabilityRequest, deps *Deps) (interface{}, error) 
 	if currentCommit != remoteCommit {
 		behindBy = 1
 		st.BehindBy = 1
-		// Check if remote commit is in ignored versions
 		policy := deps.UpdateManager.Policy()
 		ignored := false
 		for _, v := range policy.IgnoredVersions {
@@ -434,6 +437,85 @@ func updateIgnore(req *types.CapabilityRequest, deps *Deps) (interface{}, error)
 	return map[string]interface{}{
 		"ignoredVersions": policy.IgnoredVersions,
 		"ignoredVersion":  p.Version,
+	}, nil
+}
+
+// ── update.check (release source) ────────────────────────────────────────
+
+func updateCheckRelease(deps *Deps, src update.UpdateSource) (interface{}, error) {
+	checker := update.NewReleaseChecker(src.ReleaseRepo, src.ReleaseCurrent)
+	hasUpdate, latestTag, downloadURL, err := checker.CheckLatest()
+	if err != nil {
+		deps.UpdateManager.SetStatus(update.UpdateStatus{
+			Status:         update.StatusError,
+			Source:         src,
+			LastCheckError: err.Error(),
+		})
+		return nil, fmt.Errorf("release check: %w", err)
+	}
+
+	st := update.UpdateStatus{
+		Status:        update.StatusUpToDate,
+		Source:        src,
+		CurrentCommit: src.ReleaseCurrent,
+		RemoteCommit:  latestTag,
+		LastCheckedAt: nowMillis(),
+	}
+	if hasUpdate {
+		st.Status = update.StatusUpdateAvail
+		st.RequiresRestart = true
+		// Store download URL in RemoteCommit (used by update.apply)
+		st.RemoteCommit = downloadURL
+	}
+
+	deps.UpdateManager.SetStatus(st)
+	return statusToMap(st), nil
+}
+
+// ── update.apply ─────────────────────────────────────────────────────────
+
+func updateApply(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	if deps.UpdateManager == nil {
+		return nil, fmt.Errorf("update manager not available")
+	}
+
+	src := deps.UpdateManager.Source()
+	if src.Type != "release" {
+		return nil, fmt.Errorf("update.apply is only supported for 'release' source type")
+	}
+
+	status := deps.UpdateManager.Status()
+	if status.Status != update.StatusUpdateAvail {
+		return nil, fmt.Errorf("no update available, run update.check first")
+	}
+
+	// Get current executable path
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("get executable path: %w", err)
+	}
+
+	// Apply update
+	err = update.Apply(update.ApplyOptions{
+		DownloadURL:   status.RemoteCommit, // stored by updateCheckRelease
+		CurrentExe:    exe,
+		ReplaceTarget: exe,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update apply failed: %w", err)
+	}
+
+	// Update status
+	deps.UpdateManager.SetStatus(update.UpdateStatus{
+		Status:          update.StatusUpToDate,
+		Source:          src,
+		RequiresRestart: false,
+	})
+
+	return map[string]interface{}{
+		"status":          "applied",
+		"requiresRestart": true,
+		"message":         "update downloaded and applied, restart to activate",
 	}, nil
 }
 

@@ -111,6 +111,7 @@ var KnownCapabilities = map[string]bool{
 	"update.check":      true,
 	"update.plan":       true,
 	"update.ignore":     true,
+		"update.apply":      true,
 
 	// Operation Log
 	"operations.list":           true,

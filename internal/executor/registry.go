@@ -338,5 +338,6 @@ func (r *Registry) registerConditional(cfg RegistryConfig) {
 		r.Register("update.check", updateCheck)
 		r.Register("update.plan", updatePlan)
 		r.Register("update.ignore", updateIgnore)
+			r.Register("update.apply", updateApply)
 	}
 }
