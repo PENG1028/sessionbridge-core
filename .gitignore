@@ -1,6 +1,7 @@
 # Build output
 /sessionnode
 /sessionnode.exe
+/node.exe
 /ws-test
 /ws-test.exe
 

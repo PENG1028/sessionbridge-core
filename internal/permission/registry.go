@@ -132,5 +132,9 @@ var AllPluginsCaps = map[types.PluginID][]string{
 		"update.check",
 		"update.plan",
 		"update.ignore",
+		// ── Desktop (AI 电脑操作) ──
+		"desktop.clipboard.get",
+		"desktop.clipboard.set",
+		"desktop.screenshot",
 	},
 }

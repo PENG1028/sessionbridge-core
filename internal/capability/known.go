@@ -120,6 +120,11 @@ var KnownCapabilities = map[string]bool{
 	"operations.rollbackRange":  true,
 	"operations.verify":         true,
 
+	// Desktop — AI 电脑操作
+	"desktop.clipboard.get": true,
+	"desktop.clipboard.set": true,
+	"desktop.screenshot":    true,
+
 	// Network
 	"network.connect": true,
 	"network.listen":  true,

@@ -158,6 +158,11 @@ var Matrix = map[string]map[string]platformRule{
 	"node.peer.revoke":        desktopFull,
 	"node.reachability.check": desktopFull,
 
+	// ── desktop family (AI 电脑操作) ──
+	"desktop.clipboard.get": desktopFull,
+	"desktop.clipboard.set": desktopFull,
+	"desktop.screenshot":    desktopFull,
+
 	// ── node identity & invite family ──
 	"node.identity.get":  desktopFull,
 	"node.invite.create": desktopFull,
