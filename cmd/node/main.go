@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"time"
 	"fmt"
 	"log"
 	"net"
@@ -18,6 +20,7 @@ import (
 	"github.com/PENG1028/sessionbridge-core/internal/logs"
 	"github.com/PENG1028/sessionbridge-core/internal/mesh"
 	"github.com/PENG1028/sessionbridge-core/internal/notify"
+	"github.com/PENG1028/sessionbridge-core/internal/oplog"
 	"github.com/PENG1028/sessionbridge-core/internal/permission"
 	"github.com/PENG1028/sessionbridge-core/internal/plan"
 	"github.com/PENG1028/sessionbridge-core/internal/process"
@@ -102,6 +105,14 @@ func main() {
 	auditStore := logs.NewAuditStore()
 
 	audit := &dispatchAuditBridge{inner: auditLogger, store: auditStore}
+
+	// Operation Log
+	opLogDir := filepath.Join(logDir, "oplog")
+	opLogStore := oplog.NewStore(opLogDir)
+	if err := opLogStore.Load(); err != nil {
+		log.Fatalf("oplog load: %v", err)
+	}
+	log.Printf("[startup] oplog: loaded %d operations", len(opLogStore.Replay("")))
 
 	log.Printf("[startup] starting sessionnode go-core — node=%s listen=%s dataDir=%s", nodeID, addr, logDir)
 
@@ -196,6 +207,22 @@ func main() {
 	// Run store — long-lived resource index
 	runStore := run.NewStore()
 
+	// Restart recovery: rebuild stores from OpLog
+	for _, op := range opLogStore.Replay("") {
+		oplog.RebuildFromOp(op, sessStore, runStore, nil)
+	}
+	// Orphan process detection
+	for _, r := range runStore.List("", "", "") {
+		if r.State == run.StateRunning {
+			if proc := procManager.Get(r.SessionID); proc == nil {
+				runStore.UpdateState(r.RunID, run.StateOrphaned)
+			}
+		}
+	}
+
+	// OpLog recorder
+	recorder := &nodeOpLogRecorder{store: opLogStore}
+
 	// Executor registry
 	execDeps := &executor.Deps{
 		Sessions:   sessStore,
@@ -221,6 +248,7 @@ func main() {
 		plan.NewManager(plan.NewPlanStore(), plan.DefaultHighRiskCaps), /* planner */
 		execReg,
 		audit,
+		recorder, /* opLog */
 		topo,
 		nodeID,
 	)
@@ -402,4 +430,39 @@ func (b *dispatchAuditBridge) Log(req *types.CapabilityRequest, allowed bool, de
 	if !allowed {
 		log.Printf("[AUDIT] DENY  %s.%s by %s/%s — %s", req.PluginID, req.Capability, req.Actor.Type, req.Actor.ID, detail)
 	}
+}
+// nodeOpLogRecorder implements dispatcher.OpLogRecorder.
+type nodeOpLogRecorder struct {
+	store *oplog.Store
+}
+
+func (r *nodeOpLogRecorder) Record(req *types.CapabilityRequest, result interface{}, execErr error) (types.OpID, error) {
+	class := executor.ClassifyCapability(req.Capability)
+	if class == types.OpClassNoop {
+		return "", nil
+	}
+	op := &types.Operation{
+		Class:       class,
+		Capability:  req.Capability,
+		Actor:       req.Actor,
+		Params:      req.Payload,
+		Timestamp:   time.Now().UnixMilli(),
+		SessionID:   extractSessionIDFromPayload(req.Payload),
+		TargetNode:  string(req.TargetNodeID),
+	}
+	return r.store.Append(op)
+}
+
+func extractSessionIDFromPayload(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return ""
+	}
+	if sid, ok := m["sessionId"].(string); ok {
+		return sid
+	}
+	return ""
 }
