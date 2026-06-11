@@ -52,6 +52,12 @@ type CoreConfig struct {
 	Auth       AuthConfig `json:"auth"`
 	Log        LogConfig  `json:"log"`
 	Storage    StorageConfig `json:"storage,omitempty"`
+
+	// RegisterPolicy controls auto-registration on this relay/hub.
+	// "open", "token", "manual". Empty = disabled.
+	RegisterPolicy string `json:"registerPolicy,omitempty"`
+	// RegisterToken is required when RegisterPolicy = "token".
+	RegisterToken string `json:"registerToken,omitempty"`
 }
 
 // StorageConfig controls disk usage for OpLog and ContentStore.

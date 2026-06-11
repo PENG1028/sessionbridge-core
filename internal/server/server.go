@@ -80,6 +80,10 @@ type Server struct {
 
 	// Invite store for remote pairing via /peer/invite/accept.
 	inviteStore *mesh.InviteStore
+
+	// Registration policy for /peer/register endpoint.
+	registerPolicy string
+	registerToken  string
 }
 
 // New creates a Server. Call Start() to begin listening.
@@ -118,6 +122,13 @@ func (s *Server) SetHubMode(enabled bool) {
 	s.hubMode = enabled
 }
 
+// SetRegisterPolicy configures the auto-registration endpoint behavior.
+// policy: "open", "token", "manual". token: required when policy="token".
+func (s *Server) SetRegisterPolicy(policy, token string) {
+	s.registerPolicy = policy
+	s.registerToken = token
+}
+
 func (s *Server) SetTopology(topo peerTopology) {
 	s.topo = topo
 }
@@ -144,6 +155,7 @@ func (s *Server) registerHandlers() {
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/peer/ws", s.handlePeerWS)
 	mux.HandleFunc("/peer/invite/accept", s.handlePeerInviteAccept)
+	mux.HandleFunc("/peer/register", s.handlePeerRegister)
 	if s.hubMode {
 		mux.HandleFunc("/admin/status", s.handleAdminStatus)
 		mux.HandleFunc("/admin/peers", s.handleAdminPeers)

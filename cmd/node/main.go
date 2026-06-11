@@ -280,6 +280,7 @@ func main() {
 		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	}
 	sv.SetHubMode(cfg.Node.HubMode || cfg.Node.Role == "hub")
+	sv.SetRegisterPolicy(cfg.Core.RegisterPolicy, cfg.Core.RegisterToken)
 	sv.SetTopology(topo)
 	topo.SetAuthToken(token)
 
