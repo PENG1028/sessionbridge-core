@@ -51,6 +51,9 @@ func operationsList(req *types.CapabilityRequest, deps *Deps) (interface{}, erro
 	}
 
 	ops := deps.OpLog.Query(filter)
+	if ops == nil {
+		ops = []*types.Operation{}
+	}
 	return map[string]interface{}{"operations": ops}, nil
 }
 

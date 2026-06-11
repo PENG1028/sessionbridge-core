@@ -475,6 +475,20 @@ func (s *Store) truncateLocked() {
 		return
 	}
 
+	// Release ContentStore references before removing index entries
+	if s.Content != nil {
+		for _, meta := range s.byTime {
+			for _, cn := range removeChunks {
+				if meta.ChunkNo == cn {
+					if op := s.readOpFromDisk(meta); op != nil && op.ContentBefore != nil {
+						s.Content.Release(op.ContentBefore.Hash)
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Remove index entries for these chunks
 	keep := make([]*operationMeta, 0, len(s.byTime))
 	for _, meta := range s.byTime {
@@ -493,20 +507,6 @@ func (s *Store) truncateLocked() {
 	}
 	s.byTime = keep
 	s.total = len(s.byTime)
-
-	// Release ContentStore references for removed operations
-	if s.Content != nil {
-		for _, meta := range s.byTime {
-			for _, cn := range removeChunks {
-				if meta.ChunkNo == cn {
-					if op := s.readOpFromDisk(meta); op != nil && op.ContentBefore != nil {
-						s.Content.Release(op.ContentBefore.Hash)
-					}
-					break
-				}
-			}
-		}
-	}
 
 	// Delete chunk files from disk
 	for _, cn := range removeChunks {

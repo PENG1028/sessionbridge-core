@@ -310,6 +310,8 @@ func (r *Registry) registerCore() {
 	r.Register("operations.rollback", operationsRollback)
 	r.Register("operations.rollbackRange", operationsRollbackRange)
 	r.Register("operations.verify", operationsVerify)
+
+	// Desktop — AI 电脑操作基础能力
 }
 
 // registerConditional registers capabilities based on RegistryConfig flags.
