@@ -84,6 +84,7 @@ type Peer struct {
 	cipher *crypto.SessionCipher // AES-256-GCM; nil = plaintext
 
 	ephemeralPriv *ecdh.PrivateKey // local ephemeral key for key exchange
+	transitOnly   bool             // true = transit trust mode (no local execution)
 }
 
 func newPeer(id types.NodeID, address string, tags []string, status string) *Peer {
@@ -113,6 +114,20 @@ func (p *Peer) GetCipher() *crypto.SessionCipher {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.cipher
+}
+
+// SetTransitOnly marks this peer as transit-only (no local execution).
+func (p *Peer) SetTransitOnly(v bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transitOnly = v
+}
+
+// IsTransitOnly returns true if this peer is transit-only.
+func (p *Peer) IsTransitOnly() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.transitOnly
 }
 
 // PeerRejectedError is returned when the remote peer explicitly rejects our
@@ -574,6 +589,34 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 				return
 			}
 		}
+		// Transit check: transit peers cannot execute local capabilities.
+		pt.mu.RLock()
+		senderPeer, senderFound := pt.peers[senderID]
+		pt.mu.RUnlock()
+		if senderFound && senderPeer.IsTransitOnly() {
+			targetIsLocal := msg.TargetNodeID == "" || msg.TargetNodeID == pt.localID
+			if targetIsLocal {
+				pt.log.Printf("TRANSIT: rejecting action.request %s from %s", msg.Capability, senderID)
+				errResp := &types.CapabilityResponse{
+					RequestID: msg.RequestID,
+					OK:        false,
+					Error:     &types.CoreError{Code: "TRANSIT_MODE_REJECTED", Message: "this peer is in transit mode and may not request local capabilities"},
+				}
+				resultMsg := protocol.NewActionResponse(errResp)
+				data, _ := resultMsg.MarshalJSON()
+				senderPeer.mu.RLock()
+				writeCh2 := senderPeer.writeCh
+				senderPeer.mu.RUnlock()
+				if writeCh2 != nil {
+					select {
+					case writeCh2 <- data:
+					default:
+					}
+				}
+				return
+			}
+		}
+
 		// A forwarded capability request from a peer. Dispatch locally.
 		if pt.dispatcher != nil {
 			req := &types.CapabilityRequest{
@@ -641,6 +684,35 @@ func (pt *PeerTopology) handleMeshCall(senderID types.NodeID, msg *protocol.Mess
 		pt.log.Printf("mesh.call from unknown peer %s - dropped", senderID)
 		return
 	}
+
+	// Transit check: transit peers cannot execute local capabilities.
+	pt.mu.RLock()
+	senderPeer, senderFound := pt.peers[senderID]
+	pt.mu.RUnlock()
+	if senderFound && senderPeer.IsTransitOnly() {
+		targetIsLocal := msg.TargetNodeID == "" || msg.TargetNodeID == pt.localID
+		if targetIsLocal {
+			pt.log.Printf("TRANSIT: rejecting mesh.call %s from %s", msg.Capability, senderID)
+			errResp := &types.CapabilityResponse{
+				RequestID: msg.RequestID,
+				OK:        false,
+				Error:     &types.CoreError{Code: "TRANSIT_MODE_REJECTED", Message: "this peer is in transit mode and may not request local capabilities"},
+			}
+			resultMsg := protocol.NewMeshResult(errResp)
+			data, _ := resultMsg.MarshalJSON()
+			peer.mu.RLock()
+			writeCh := peer.writeCh
+			peer.mu.RUnlock()
+			if writeCh != nil {
+				select {
+				case writeCh <- data:
+				default:
+				}
+			}
+			return
+		}
+	}
+
 	if d == nil {
 		pt.log.Printf("mesh.call from %s - no dispatcher wired, dropping", senderID)
 		return

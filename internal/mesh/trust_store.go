@@ -24,7 +24,7 @@ const (
 
 // TrustPolicy dictates how a trusted peer is allowed to interact.
 type TrustPolicy struct {
-	Mode string `json:"mode"` // "full" only for now
+	Mode string `json:"mode"` // "full" (default, can execute local caps) or "transit" (forward-only)
 }
 
 // TrustedPeer represents a peer node whose identity has been verified and
