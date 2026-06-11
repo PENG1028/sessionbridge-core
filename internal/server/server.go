@@ -33,6 +33,7 @@ type peerTopology interface {
 	SetInboundWriteCh(nodeID types.NodeID, writeCh chan []byte)
 	ClearInboundWriteCh(nodeID types.NodeID)
 	HandleMessage(senderID types.NodeID, data []byte)
+	InitiateKeyExchangeForPeer(peerID types.NodeID)
 }
 
 var upgrader = websocket.Upgrader{
@@ -558,6 +559,11 @@ func (s *Server) handlePeerWS(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast SSE event so web clients see real-time node status.
 	s.BroadcastNodeEvent(types.NodeID(peerNodeID), "connected")
+
+	// Initiate key exchange for inbound connections
+	if s.topo != nil {
+		s.topo.InitiateKeyExchangeForPeer(types.NodeID(peerNodeID))
+	}
 
 	// Step 8: Read loop — all messages from this peer are trusted as node-to-node.
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))

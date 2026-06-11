@@ -26,6 +26,7 @@ import (
 	"github.com/PENG1028/sessionbridge-core/internal/executor"
 	"github.com/PENG1028/sessionbridge-core/internal/mesh"
 	"github.com/PENG1028/sessionbridge-core/internal/crypto"
+	"crypto/ecdh"
 	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
 	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
@@ -81,6 +82,8 @@ type Peer struct {
 	mu      sync.RWMutex
 
 	cipher *crypto.SessionCipher // AES-256-GCM; nil = plaintext
+
+	ephemeralPriv *ecdh.PrivateKey // local ephemeral key for key exchange
 }
 
 func newPeer(id types.NodeID, address string, tags []string, status string) *Peer {
@@ -1272,4 +1275,137 @@ func (pt *PeerTopology) RemovePeer(nodeID types.NodeID) error {
 func (pt *PeerTopology) ReconnectPeer(nodeID types.NodeID) error {
 	_ = pt.DisconnectPeer(nodeID)
 	return pt.ConnectPeer(nodeID)
+}
+
+// ── Key Exchange ─────────────────────────────────────────────────────────
+
+// InitiateKeyExchangeForPeer generates an ephemeral key and sends it to the peer
+// identified by peerID. This is called for inbound connections from server.go.
+func (pt *PeerTopology) InitiateKeyExchangeForPeer(peerID types.NodeID) {
+	pt.mu.RLock()
+	peer, ok := pt.peers[peerID]
+	pt.mu.RUnlock()
+	if !ok {
+		return
+	}
+	peer.mu.RLock()
+	writeCh := peer.writeCh
+	peer.mu.RUnlock()
+	if writeCh == nil {
+		// Check inbound writers
+		pt.inboundMu.RLock()
+		writeCh = pt.inboundWriters[peerID]
+		pt.inboundMu.RUnlock()
+	}
+	pt.initiateKeyExchange(peer, writeCh)
+}
+
+// initiateKeyExchange generates an ephemeral X25519 key and sends it to the peer.
+func (pt *PeerTopology) initiateKeyExchange(peer *Peer, writeCh chan []byte) {
+	if pt.identity == nil {
+		return // no identity configured, skip encryption
+	}
+
+	localKey, err := crypto.GenerateEphemeralKey()
+	if err != nil {
+		pt.log.Printf("key exchange: generate key: %v", err)
+		return
+	}
+
+	peer.mu.Lock()
+	peer.ephemeralPriv = localKey
+	peer.mu.Unlock()
+
+	// Send our public key
+	pubBytes := localKey.PublicKey().Bytes()
+	payload, _ := json.Marshal(map[string]interface{}{
+		"publicKey": pubBytes,
+	})
+	keyMsg := &protocol.Message{
+		Type:    protocol.MsgTypeKeyExchange,
+		Payload: payload,
+	}
+	data, err := keyMsg.MarshalJSON()
+	if err != nil {
+		pt.log.Printf("key exchange: marshal: %v", err)
+		return
+	}
+
+	select {
+	case writeCh <- data:
+		pt.log.Printf("key exchange: sent public key to %s", peer.ID)
+	default:
+		pt.log.Printf("key exchange: write channel full for %s", peer.ID)
+	}
+}
+
+// handleKeyExchange processes an incoming key.exchange message.
+func (pt *PeerTopology) handleKeyExchange(senderID types.NodeID, payload json.RawMessage) {
+	var msg struct {
+		PublicKey []byte `json:"publicKey"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil || len(msg.PublicKey) != 32 {
+		pt.log.Printf("key exchange: invalid payload from %s", senderID)
+		return
+	}
+
+	pt.mu.RLock()
+	peer, ok := pt.peers[senderID]
+	pt.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	peer.mu.RLock()
+	localPriv := peer.ephemeralPriv
+	peer.mu.RUnlock()
+
+	if localPriv == nil {
+		// We haven't initiated key exchange yet — send ours first
+		pt.log.Printf("key exchange: received key from %s before initiating, sending ours", senderID)
+		key, err := crypto.GenerateEphemeralKey()
+		if err != nil {
+			return
+		}
+		peer.mu.Lock()
+		peer.ephemeralPriv = key
+		peer.mu.Unlock()
+		localPriv = key
+
+		// Send our key back
+		pubBytes := key.PublicKey().Bytes()
+		payload, _ := json.Marshal(map[string]interface{}{"publicKey": pubBytes})
+		keyMsg := &protocol.Message{
+			Type:    protocol.MsgTypeKeyExchange,
+			Payload: payload,
+		}
+		if data, err := keyMsg.MarshalJSON(); err == nil {
+			peer.mu.RLock()
+			ch := peer.writeCh
+			peer.mu.RUnlock()
+			if ch != nil {
+				select {
+				case ch <- data:
+				default:
+				}
+			}
+		}
+	}
+
+	// Import the remote public key
+	remotePub, err := ecdh.X25519().NewPublicKey(msg.PublicKey)
+	if err != nil {
+		pt.log.Printf("key exchange: invalid public key from %s: %v", senderID, err)
+		return
+	}
+
+	// Create cipher
+	ciph, err := crypto.NewSessionCipher(localPriv, remotePub)
+	if err != nil {
+		pt.log.Printf("key exchange: create cipher: %v", err)
+		return
+	}
+
+	peer.SetCipher(ciph)
+	pt.log.Printf("key exchange: cipher established for %s", senderID)
 }
