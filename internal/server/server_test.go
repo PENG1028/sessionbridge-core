@@ -51,6 +51,7 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 		nil, /* planner */
 		execReg,
 		audit,
+		nil, /* opLog */
 		topo,
 		"node_local",
 	)
@@ -676,6 +677,7 @@ func testServerWithHistory(t *testing.T) (*Server, *httptest.Server, *history.St
 		nil, /* planner */
 		execReg,
 		audit,
+		nil, /* opLog */
 		topo,
 		"node_local",
 	)
@@ -723,6 +725,7 @@ func testServerWithRealPermission(t *testing.T, caps map[types.PluginID][]string
 		nil, /* planner */
 		execReg,
 		audit,
+		nil, /* opLog */
 		topo,
 		"node_local",
 	)
@@ -826,6 +829,7 @@ func TestWSAccessControl_DenyMode(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&mockAuditLogger{},
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -1063,6 +1067,7 @@ func testServerWithToken(t *testing.T, token string) (*Server, *httptest.Server)
 		nil, /* planner */
 		execReg,
 		audit,
+		nil, /* opLog */
 		topo,
 		"node_local",
 	)
@@ -1253,6 +1258,7 @@ func testServerWithRunStore(t *testing.T) (*Server, *httptest.Server, *run.Store
 		nil, /* planner */
 		execReg,
 		audit,
+		nil, /* opLog */
 		topo,
 		"node_local",
 	)

@@ -185,6 +185,7 @@ func TestDispatch_AuthenticateError(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -215,6 +216,7 @@ func TestDispatch_PluginNotFound(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -239,6 +241,7 @@ func TestDispatch_PluginDisabled(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -263,6 +266,7 @@ func TestDispatch_PermissionDenied(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -288,6 +292,7 @@ func TestDispatch_RemoteNodeForward(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{
 			target: &NodeTarget{
 				ID: "node_remote",
@@ -321,6 +326,7 @@ func TestDispatch_RemoteNodeNotFound(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{err: errors.New("node not found")},
 		"node_local",
 	)
@@ -346,6 +352,7 @@ func TestDispatch_RemoteForwardError(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{
 			target: &NodeTarget{
 				ID: "node_remote",
@@ -378,6 +385,7 @@ func TestDispatch_ExecuteError(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{err: errors.New("execution failed")},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -417,6 +425,7 @@ func TestDispatch_AuditCalledOnFailure(t *testing.T) {
 		nil, /* no planner */
 		&mockExecutor{},
 		&mockAuditLogger{},
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -455,6 +464,7 @@ func TestDispatch_PlanRequired_CreatesPlan(t *testing.T) {
 		&mockPlanner{requiresPlan: true, planID: "plan_001"},
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -490,6 +500,7 @@ func TestDispatch_PlanNotRequired_PassesThrough(t *testing.T) {
 		&mockPlanner{requiresPlan: false},
 		&mockExecutor{result: "executed"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -514,6 +525,7 @@ func TestDispatch_PlanWithPlanID_SkipsPlanCheck(t *testing.T) {
 		&mockPlanner{requiresPlan: true, planID: "plan_001"},
 		&mockExecutor{result: "approved-execution"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -540,6 +552,7 @@ func TestDispatch_PlanNilPlanner_SkipsPlanCheck(t *testing.T) {
 		nil, /* no planner configured */
 		&mockExecutor{result: "direct"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -561,6 +574,7 @@ func TestDispatch_PlanCreationFailure(t *testing.T) {
 		&mockPlanner{requiresPlan: true, err: errors.New("store full")},
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -588,6 +602,7 @@ func TestDispatch_HighRiskWithApprovedPlan_Executes(t *testing.T) {
 		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "approved"},
 		&mockExecutor{result: "approved-execution"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -629,6 +644,7 @@ func TestDispatch_HighRiskWithDeniedPlan_ReturnsApprovalDenied(t *testing.T) {
 		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "denied"},
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -655,6 +671,7 @@ func TestDispatch_HighRiskWithPendingPlan_ReturnsApprovalRequired(t *testing.T) 
 		&mockPlanner{requiresPlan: true, planID: "plan_001", planState: "pending"},
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -681,6 +698,7 @@ func TestDispatch_HighRiskPlanNotFound_ReturnsPlanRequired(t *testing.T) {
 		&mockPlanner{requiresPlan: true, planState: "not_found"},
 		&mockExecutor{result: "ok"},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)
@@ -708,6 +726,7 @@ func createSuccessDispatcher(audit *mockAuditLogger, localNodeID types.NodeID) *
 		nil, /* no planner */
 		&mockExecutor{result: map[string]interface{}{"status": "ok"}},
 		audit,
+		nil, /* opLog */
 		&mockTopology{},
 		localNodeID,
 	)

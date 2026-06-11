@@ -19,6 +19,7 @@ type CapabilityRequest struct {
 	Payload      json.RawMessage `json:"payload,omitempty"`      // deferred deserialization
 	Timestamp    int64           `json:"timestamp"`              // unix millis
 	PlanID       string          `json:"planId,omitempty"`       // approved plan ID for high-risk capabilities
+	SkipRecording bool           `json:"_skipRecording,omitempty"` // opt-out of OpLog recording
 	ConnID       string          `json:"-"`                      // connection ID of the requesting WS client (not serialized)
 }
 

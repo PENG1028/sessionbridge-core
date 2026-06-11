@@ -59,6 +59,7 @@ func testPeerNode(t *testing.T, id types.NodeID) (*server.Server, *httptest.Serv
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		peerTopo,
 		id,
 	)
@@ -569,6 +570,7 @@ func TestPeerTopology_WSClientCreateOnPeer(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"main",
 	)
@@ -658,6 +660,7 @@ func TestPeerTopology_ListNodesViaWS(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"main",
 	)
@@ -742,6 +745,7 @@ func TestPeerTopology_ActorTypeNodeBypass(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		peerTopo,
 		"peer-node",
 	)
@@ -872,6 +876,7 @@ func newDispatcherForTopology(t *testing.T, pt *PeerTopology, localID types.Node
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		localID,
 	)
@@ -1276,6 +1281,7 @@ func testPeerNodeWithHistory(t *testing.T, id types.NodeID) (*server.Server, *ht
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		peerTopo,
 		id,
 	)
@@ -1339,6 +1345,7 @@ func TestTwoCore_Scenario1_LocalTerminal_VPSViewsHistory(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"node-local",
 	)
@@ -1534,6 +1541,7 @@ func TestTwoCore_Scenario3_TokenScopeDeniesLocal(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"node-local",
 	)
@@ -1751,7 +1759,7 @@ func TestTwoCore_Scenario1B_TrueCrossNodeHistoryReplay(t *testing.T) {
 
 	dLocal := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
-		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
+		nil, execRegLocal, &silentAudit{}, nil, localTopo, "node-local",
 	)
 	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil, "")
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
@@ -1785,7 +1793,7 @@ func TestTwoCore_Scenario1B_TrueCrossNodeHistoryReplay(t *testing.T) {
 
 	dVPS := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, vpsPerm,
-		nil, execRegVPS, &silentAudit{}, vpsTopo, "node-vps",
+		nil, execRegVPS, &silentAudit{}, nil, vpsTopo, "node-vps",
 	)
 
 	// --- Step 1: Client on local creates a session ---
@@ -1921,6 +1929,7 @@ func TestTwoCore_ServiceTokenScopeE2E(t *testing.T) {
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"node-local",
 	)
@@ -2030,7 +2039,7 @@ func TestTwoCore_VPSSecondaryPermissionCheck(t *testing.T) {
 
 	dVPS := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, vpsPerm,
-		nil, vpsExecReg, &silentAudit{}, vpsTopo, "node-vps",
+		nil, vpsExecReg, &silentAudit{}, nil, vpsTopo, "node-vps",
 	)
 	vpsSrv := server.New("", dVPS, vpsSess, vpsCR, vpsPM, nil, nil, "")
 	vpsHTTPSrv := httptest.NewServer(vpsSrv.Handler())

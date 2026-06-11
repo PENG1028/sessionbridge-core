@@ -112,6 +112,7 @@ func testServerWithMesh(t *testing.T, serverID string) (*Server, *httptest.Serve
 		nil,
 		execReg,
 		&mockAuditLogger{},
+		nil, /* opLog */
 		&mockTopology{},
 		"node_local",
 	)

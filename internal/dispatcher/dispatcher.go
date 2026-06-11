@@ -47,6 +47,13 @@ type AuditLogger interface {
 	Log(req *types.CapabilityRequest, allowed bool, detail string)
 }
 
+// OpLogRecorder records an executed operation into the Operation Log.
+// The implementation handles classification and storage.
+// May be nil — if nil, no operation is recorded.
+type OpLogRecorder interface {
+	Record(req *types.CapabilityRequest, result interface{}, execErr error) (types.OpID, error)
+}
+
 // Topology resolves target nodes for remote routing.
 type Topology interface {
 	Get(nodeID types.NodeID) (*NodeTarget, error)
@@ -68,9 +75,10 @@ type NodeTarget struct {
 
 // --- Dispatcher ---
 
-// Dispatcher implements the 8-step capability dispatch chain:
+// Dispatcher implements the capability dispatch chain:
 // authenticate → resolve plugin → check enabled → check permission →
 // plan check → route to target → execute → audit → return.
+// If opLog is non-nil, executed operations are automatically recorded.
 type Dispatcher struct {
 	auth        Authenticator
 	plugins     PluginRegistry
@@ -78,12 +86,13 @@ type Dispatcher struct {
 	planner     Planner
 	executor    Executor
 	audit       AuditLogger
+	opLog       OpLogRecorder
 	topology    Topology
 	localNodeID types.NodeID
 }
 
 // New creates a Dispatcher with the given component implementations.
-// planner may be nil if Plan Before Apply is not configured.
+// planner and opLog may be nil if not configured.
 func New(
 	auth Authenticator,
 	plugins PluginRegistry,
@@ -91,6 +100,7 @@ func New(
 	planner Planner,
 	executor Executor,
 	audit AuditLogger,
+	opLog OpLogRecorder,
 	topology Topology,
 	localNodeID types.NodeID,
 ) *Dispatcher {
@@ -101,6 +111,7 @@ func New(
 		planner:     planner,
 		executor:    executor,
 		audit:       audit,
+		opLog:       opLog,
 		topology:    topology,
 		localNodeID: localNodeID,
 	}
@@ -207,7 +218,12 @@ func (d *Dispatcher) Dispatch(req *types.CapabilityRequest) *types.CapabilityRes
 	// Step 7: Audit success
 	d.audit.Log(req, true, "")
 
-	// Step 8: Return
+	// Step 8: OpLog record (opt-out via SkipRecording)
+	if !req.SkipRecording && d.opLog != nil {
+		d.opLog.Record(req, result, nil)
+	}
+
+	// Step 9: Return
 	return &types.CapabilityResponse{
 		RequestID: req.RequestID,
 		OK:        true,

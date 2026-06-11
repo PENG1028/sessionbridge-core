@@ -115,6 +115,7 @@ func testMeshNode(t *testing.T, id types.NodeID) (
 		nil, /* planner */
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		topo,
 		id,
 	)
@@ -394,6 +395,7 @@ func TestTwoCore_AutoReconnectPeerRestoredFromTrustStore(t *testing.T) {
 		nil, /* planner */
 		execRegB,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB,
 		"node-b",
 	)
@@ -502,6 +504,7 @@ func TestTwoCore_AutoReconnectPeerRestoredFromTrustStore(t *testing.T) {
 		nil,
 		execRegB2,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB2,
 		"node-b",
 	)
@@ -583,6 +586,7 @@ func TestPeerDisconnect_DisablesAutoReconnectAcrossRestart(t *testing.T) {
 		nil,
 		execRegB,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB,
 		"node-b",
 	)
@@ -729,6 +733,7 @@ func TestPeerReconnect_EnablesAutoReconnectAcrossRestart(t *testing.T) {
 		nil,
 		execRegB,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB,
 		"node-b",
 	)
@@ -850,6 +855,7 @@ func TestPeerReconnect_EnablesAutoReconnectAcrossRestart(t *testing.T) {
 		nil,
 		execRegB2,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB2,
 		"node-b",
 	)
@@ -930,6 +936,7 @@ func TestPeerRevoke_RemovesTrustAndDisallowsRestore(t *testing.T) {
 		nil,
 		execRegB,
 		&silentAudit{},
+		nil, /* opLog */
 		topoB,
 		"node-b",
 	)

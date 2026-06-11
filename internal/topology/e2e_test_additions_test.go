@@ -94,7 +94,7 @@ func TestTwoCore_RealProcessHistoryCapture(t *testing.T) {
 
 	dLocal := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
-		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
+		nil, execRegLocal, &silentAudit{}, nil, localTopo, "node-local",
 	)
 	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil, "")
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
@@ -128,7 +128,7 @@ func TestTwoCore_RealProcessHistoryCapture(t *testing.T) {
 
 	dVPS := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, vpsPerm,
-		nil, execRegVPS, &silentAudit{}, vpsTopo, "node-vps",
+		nil, execRegVPS, &silentAudit{}, nil, vpsTopo, "node-vps",
 	)
 
 	// Step 1: Create a session on local
@@ -260,7 +260,7 @@ func TestTwoCore_RemoteHistoryNotStored(t *testing.T) {
 	localTopo := New(Config{LocalID: "node-local", LocalName: "node-local"})
 	dLocal := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, localPerm,
-		nil, execRegLocal, &silentAudit{}, localTopo, "node-local",
+		nil, execRegLocal, &silentAudit{}, nil, localTopo, "node-local",
 	)
 	localSrv := server.New("", dLocal, sessLocal, crLocal, pmLocal, nil, nil, "")
 	localHTTPSrv := httptest.NewServer(localSrv.Handler())
@@ -292,7 +292,7 @@ func TestTwoCore_RemoteHistoryNotStored(t *testing.T) {
 
 	dVPS := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, vpsPerm,
-		nil, execRegVPS, &silentAudit{}, vpsTopo, "node-vps",
+		nil, execRegVPS, &silentAudit{}, nil, vpsTopo, "node-vps",
 	)
 
 	// Create session on local
@@ -370,7 +370,7 @@ func TestTwoCore_AuditContentAssertions(t *testing.T) {
 
 	d := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, perm,
-		nil, execReg, audit, pt, "node-local",
+		nil, execReg, audit, nil, pt, "node-local",
 	)
 
 	// Test 1: Successful system.info
@@ -449,7 +449,7 @@ func TestTwoCore_AuditContentAssertions(t *testing.T) {
 	perm2 := permission.NewChecker(&permitAllCaps{}, &permitAllPolicy{})
 	d2 := dispatcher.New(
 		auth.NewTokenAuthenticator(""), &allowAnyPlugin{}, perm2,
-		nil, execReg, audit2, pt2, "node-local",
+		nil, execReg, audit2, nil, pt2, "node-local",
 	)
 
 	// Forward to VPS
@@ -599,6 +599,7 @@ func TestTwoCore_CrossNodeStreamChunk(t *testing.T) {
 		nil,
 		execReg,
 		&silentAudit{},
+		nil, /* opLog */
 		pt,
 		"node-a",
 	)
