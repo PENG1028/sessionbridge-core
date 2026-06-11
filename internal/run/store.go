@@ -178,6 +178,19 @@ func (s *Store) Delete(runID string) bool {
 	return ok
 }
 
+// Rebuild inserts a run directly into the store using the given Run fields.
+// Used during OpLog replay to reconstruct run state after restart.
+// Unlike Create, this does not auto-generate an ID and ensures the counter
+// stays ahead of the highest run ID sequence number.
+func (s *Store) Rebuild(r *Run) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs[r.RunID] = r
+	if n := parseRunSeq(r.RunID); n > s.counter.Load() {
+		s.counter.Store(n)
+	}
+}
+
 // Count returns the number of runs.
 func (s *Store) Count() int {
 	s.mu.RLock()

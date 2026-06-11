@@ -58,6 +58,18 @@ func (s *Store) Destroy(id types.SessionID) {
 	delete(s.sessions, id)
 }
 
+// Rebuild inserts a session directly into the store with the given fields.
+// Used during OpLog replay to reconstruct session state after restart.
+// Unlike Create, this does not auto-generate an ID.
+func (s *Store) Rebuild(id types.SessionID, pluginID types.PluginID, command, cwd, state string, createdAt, updatedAt int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := NewSession(id, pluginID, command, cwd, createdAt)
+	sess.State = state
+	sess.UpdatedAt = updatedAt
+	s.sessions[id] = sess
+}
+
 // List returns all sessions.
 func (s *Store) List() []*Session {
 	s.mu.RLock()
