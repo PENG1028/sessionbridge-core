@@ -8,21 +8,52 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
-      - uses: goreleaser/goreleaser-action@v5
+      - name: Build all platforms
+        run: |
+          mkdir -p dist
+          VERSION=${GITHUB_REF_NAME#v}
+
+          # darwin skipped — pty_unix.go uses linux-only syscall.TCGETS/TCSETS
+          for GOOS in linux windows; do
+            for GOARCH in amd64 arm64; do
+              if [ "$GOOS" = "windows" ] && [ "$GOARCH" = "arm64" ]; then
+                continue
+              fi
+
+              EXT=""
+              if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
+
+              echo "Building: ${GOOS}/${GOARCH}"
+              GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 \
+                go build -ldflags="-s -w" \
+                -o "sessionnode${EXT}" \
+                ./cmd/node/
+
+              tar -czf "dist/sessionbridge-core_${VERSION}_${GOOS}_${GOARCH}.tar.gz" \
+                "sessionnode${EXT}"
+
+              rm "sessionnode${EXT}"
+            done
+          done
+
+          sha256sum dist/*.tar.gz > dist/checksums.txt
+          echo "=== Built ==="
+          ls -lh dist/
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
         with:
-          distribution: goreleaser
-          version: '~> v1'
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/sessionbridge-core_*.tar.gz
+            dist/checksums.txt
