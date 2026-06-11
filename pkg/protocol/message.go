@@ -46,6 +46,9 @@ const (
 	// SSE events — broadcast to all web clients via /ws connections.
 	MsgTypeNodeConnected    = "node.connected"
 	MsgTypeNodeDisconnected = "node.disconnected"
+
+	// Encryption — ephemeral key exchange for AES-256-GCM.
+	MsgTypeKeyExchange = "key.exchange"
 )
 
 // Message is the universal WebSocket message envelope.
@@ -70,6 +73,11 @@ type Message struct {
 	Payload      json.RawMessage  `json:"payload,omitempty"`
 	Error        *types.CoreError `json:"error,omitempty"`
 	Timestamp    int64            `json:"timestamp,omitempty"`
+
+	// Encryption (Phase 1): when set, Payload is nil and content is in EncryptedPayload.
+	EncryptedPayload []byte `json:"encryptedPayload,omitempty"`
+	EncryptNonce     []byte `json:"encryptNonce,omitempty"`
+	KeyID            string `json:"keyId,omitempty"`
 }
 
 // --- Action messages ---

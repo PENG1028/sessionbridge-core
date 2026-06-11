@@ -25,6 +25,7 @@ import (
 	"github.com/PENG1028/sessionbridge-core/internal/dispatcher"
 	"github.com/PENG1028/sessionbridge-core/internal/executor"
 	"github.com/PENG1028/sessionbridge-core/internal/mesh"
+	"github.com/PENG1028/sessionbridge-core/internal/crypto"
 	"github.com/PENG1028/sessionbridge-core/pkg/protocol"
 	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
@@ -78,6 +79,8 @@ type Peer struct {
 	conn    *websocket.Conn
 	writeCh chan []byte
 	mu      sync.RWMutex
+
+	cipher *crypto.SessionCipher // AES-256-GCM; nil = plaintext
 }
 
 func newPeer(id types.NodeID, address string, tags []string, status string) *Peer {
@@ -93,6 +96,20 @@ func (p *Peer) getStatus() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.status
+}
+
+// SetCipher sets the session encryption cipher for this peer.
+func (p *Peer) SetCipher(c *crypto.SessionCipher) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cipher = c
+}
+
+// GetCipher returns the session cipher (nil = plaintext).
+func (p *Peer) GetCipher() *crypto.SessionCipher {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.cipher
 }
 
 // PeerRejectedError is returned when the remote peer explicitly rejects our
@@ -413,6 +430,14 @@ func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*type
 	// only if no trust store is configured.
 	msg.ActorType = "node"
 
+	// Encrypt payload if peer has a session cipher
+	if peer.cipher != nil && len(msg.Payload) > 0 {
+		ct, nonce := peer.cipher.Encrypt(msg.Payload)
+		msg.EncryptedPayload = ct
+		msg.EncryptNonce = nonce
+		msg.Payload = nil
+	}
+
 	data, err := msg.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("marshal forward message: %w", err)
@@ -452,6 +477,21 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 	msg, err := protocol.UnmarshalMessage(data)
 	if err != nil {
 		return
+	}
+
+	// Decrypt payload if encrypted
+	if len(msg.EncryptedPayload) > 0 {
+		pt.mu.RLock()
+		senderPeer := pt.peers[senderID]
+		pt.mu.RUnlock()
+		if senderPeer != nil && senderPeer.cipher != nil {
+			plaintext, err := senderPeer.cipher.Decrypt(msg.EncryptedPayload, msg.EncryptNonce)
+			if err == nil {
+				msg.Payload = plaintext
+				msg.EncryptedPayload = nil
+				msg.EncryptNonce = nil
+			}
+		}
 	}
 
 	switch msg.Type {
