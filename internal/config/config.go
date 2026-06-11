@@ -74,8 +74,9 @@ type LogConfig struct {
 
 // NodeConfig identifies the local node.
 type NodeConfig struct {
-	Name string `json:"name"`
-	Role string `json:"role"` // "standalone","relay","leaf"
+	Name    string `json:"name"`
+	Role    string `json:"role"` // "standalone","relay","leaf","hub"
+	HubMode bool   `json:"hubMode,omitempty"` // explicit switch; role="hub" implies true
 }
 
 // PluginConfig holds plugin-level settings.

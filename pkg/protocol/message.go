@@ -23,6 +23,7 @@ const (
 	MsgTypeNotifyRespond        = "notify.respond"
 	MsgTypeNotifyApprovalReq    = "notify.approval.request"
 	MsgTypeNotifyApprovalResult = "notify.approval.result"
+	MsgTypeRelayPolicy          = "relay.policy"
 	MsgTypeError                = "error"
 	MsgTypeHello                = "hello"
 	MsgTypeWelcome              = "welcome"
@@ -391,4 +392,15 @@ func NewMeshResult(resp *types.CapabilityResponse) *Message {
 		m.Payload = data
 	}
 	return m
+}
+
+// RelayPolicyPayload is broadcast by a hub to all connected leaf nodes
+// to inform them of the hub's current load and capacity.
+type RelayPolicyPayload struct {
+	Status          string   `json:"status"`                    // "normal" | "busy" | "maintenance"
+	RateLimit       string   `json:"rateLimit,omitempty"`       // e.g. "10req/min"
+	MaxConnections  int      `json:"maxConnections,omitempty"`  // 0 = unlimited
+	Features        []string `json:"features,omitempty"`        // available feature list
+	RetryAfter      int      `json:"retryAfter,omitempty"`      // seconds
+	Message         string   `json:"message,omitempty"`         // human-readable reason
 }

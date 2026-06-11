@@ -75,6 +75,9 @@ type Server struct {
 
 	topo peerTopology
 
+	// Hub mode — when true, node is forward-only.
+	hubMode bool
+
 	// Invite store for remote pairing via /peer/invite/accept.
 	inviteStore *mesh.InviteStore
 }
@@ -111,6 +114,10 @@ func (s *Server) SetInviteStore(is *mesh.InviteStore) {
 }
 
 // SetTopology sets the topology for inbound peer forwarding.
+func (s *Server) SetHubMode(enabled bool) {
+	s.hubMode = enabled
+}
+
 func (s *Server) SetTopology(topo peerTopology) {
 	s.topo = topo
 }
@@ -137,11 +144,27 @@ func (s *Server) registerHandlers() {
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/peer/ws", s.handlePeerWS)
 	mux.HandleFunc("/peer/invite/accept", s.handlePeerInviteAccept)
+	if s.hubMode {
+		mux.HandleFunc("/admin/status", s.handleAdminStatus)
+		mux.HandleFunc("/admin/peers", s.handleAdminPeers)
+	}
 	s.httpServer = &http.Server{Addr: s.addr, Handler: mux}
 }
 
 // Start begins listening and handles graceful shutdown on SIGINT/SIGTERM.
 // Uses TLS if cert and key files were configured via NewWithTLS, otherwise plain HTTP.
+// startAdminServer starts a localhost-only HTTP server for hub management.
+func (s *Server) startAdminServer() {
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("/status", s.handleAdminStatus)
+	adminMux.HandleFunc("/peers", s.handleAdminPeers)
+	adminAddr := "127.0.0.1:9190"
+	log.Printf("[admin] admin server on %s", adminAddr)
+	if err := http.ListenAndServe(adminAddr, adminMux); err != nil {
+		log.Printf("[admin] admin server error: %v", err)
+	}
+}
+
 func (s *Server) Start() error {
 	// Channel for shutdown signals
 	quit := make(chan os.Signal, 1)
@@ -163,6 +186,11 @@ func (s *Server) Start() error {
 	log.Printf("[server] SessionNode Go Core listening on %s (%s)", s.addr, scheme)
 	log.Printf("[server]   WS:   %s://%s/ws", wsScheme, s.addr)
 	log.Printf("[server]   API:  %s://%s/health", scheme, s.addr)
+
+	// Start admin server in hub mode
+	if s.hubMode {
+		go s.startAdminServer()
+	}
 
 	if s.tlsCert != "" && s.tlsKey != "" {
 		if err := s.httpServer.ListenAndServeTLS(s.tlsCert, s.tlsKey); err != nil && err != http.ErrServerClosed {
@@ -897,4 +925,35 @@ func actionResponseToMessage(reqMsg *protocol.Message, resp *types.CapabilityRes
 		}
 	}
 	return out
+}
+
+// --- Admin handlers (hub mode) ---
+
+func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"mode":     "hub",
+		"dispatcher": s.dispatcher != nil,
+	})
+}
+
+func (s *Server) handleAdminPeers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	type peerInfo struct {
+		NodeID string `json:"nodeId"`
+	}
+	var peers []peerInfo
+	s.peerConnsMu.RLock()
+	for connID, nodeID := range s.peerConns {
+		_ = connID
+		peers = append(peers, peerInfo{NodeID: nodeID})
+	}
+	s.peerConnsMu.RUnlock()
+	if peers == nil {
+		peers = []peerInfo{}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"peers": peers,
+		"count": len(peers),
+	})
 }

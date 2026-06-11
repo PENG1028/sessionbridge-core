@@ -106,13 +106,17 @@ func main() {
 
 	audit := &dispatchAuditBridge{inner: auditLogger, store: auditStore}
 
-	// Operation Log
-	opLogDir := filepath.Join(logDir, "oplog")
-	opLogStore := oplog.NewStore(opLogDir)
-	if err := opLogStore.Load(); err != nil {
-		log.Fatalf("oplog load: %v", err)
+	// Operation Log (skipped in hub mode — hub does not execute capabilities)
+	isHub := cfg.Node.HubMode || cfg.Node.Role == "hub"
+	var opLogStore *oplog.Store
+	if !isHub {
+		opLogDir := filepath.Join(logDir, "oplog")
+		opLogStore = oplog.NewStore(opLogDir)
+		if err := opLogStore.Load(); err != nil {
+			log.Fatalf("oplog load: %v", err)
+		}
+		log.Printf("[startup] oplog: loaded %d operations", len(opLogStore.Replay("")))
 	}
-	log.Printf("[startup] oplog: loaded %d operations", len(opLogStore.Replay("")))
 
 	log.Printf("[startup] starting sessionnode go-core — node=%s listen=%s dataDir=%s", nodeID, addr, logDir)
 
@@ -157,6 +161,7 @@ func main() {
 		Identity:             nodeIdentity,
 		Peers:                peers,
 		InboundPeerReachable: inboundPeerReachable,
+		ForwardOnly:          cfg.Node.HubMode || cfg.Node.Role == "hub",
 	}
 	topo := topology.New(topoCfg)
 	// Forward stream chunks and session events from peers to local subscribers.
@@ -207,21 +212,26 @@ func main() {
 	// Run store — long-lived resource index
 	runStore := run.NewStore()
 
-	// Restart recovery: rebuild stores from OpLog
-	for _, op := range opLogStore.Replay("") {
-		oplog.RebuildFromOp(op, sessStore, runStore, nil)
-	}
-	// Orphan process detection
-	for _, r := range runStore.List("", "", "") {
-		if r.State == run.StateRunning {
-			if proc := procManager.Get(r.SessionID); proc == nil {
-				runStore.UpdateState(r.RunID, run.StateOrphaned)
+	// Restart recovery: rebuild stores from OpLog (skipped in hub mode)
+	if !isHub && opLogStore != nil {
+		for _, op := range opLogStore.Replay("") {
+			oplog.RebuildFromOp(op, sessStore, runStore, nil)
+		}
+		// Orphan process detection
+		for _, r := range runStore.List("", "", "") {
+			if r.State == run.StateRunning {
+				if proc := procManager.Get(r.SessionID); proc == nil {
+					runStore.UpdateState(r.RunID, run.StateOrphaned)
+				}
 			}
 		}
 	}
 
-	// OpLog recorder
-	recorder := &nodeOpLogRecorder{store: opLogStore}
+	// OpLog recorder (nil in hub mode)
+	var recorder dispatcher.OpLogRecorder
+	if !isHub && opLogStore != nil {
+		recorder = &nodeOpLogRecorder{store: opLogStore}
+	}
 
 	// Executor registry
 	execDeps := &executor.Deps{
@@ -263,6 +273,7 @@ func main() {
 		sv = server.New(addr, d, sessStore, connRegistry, procManager, nodeIdentity, trustStore, token)
 		sv.SetInviteStore(execDeps.Mesh.InviteStore)
 	}
+	sv.SetHubMode(cfg.Node.HubMode || cfg.Node.Role == "hub")
 	sv.SetTopology(topo)
 	topo.SetAuthToken(token)
 

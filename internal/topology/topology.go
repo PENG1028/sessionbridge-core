@@ -38,6 +38,7 @@ type Config struct {
 	Identity  *mesh.NodeIdentity // local node identity for peer handshake
 	Peers     []PeerConfig
 	InboundPeerReachable bool // set at startup: can this Core accept /peer/ws?
+	ForwardOnly           bool // true = hub mode: route only, never execute locally
 }
 
 // PeerConfig describes a remote peer to connect to.
@@ -125,6 +126,9 @@ type PeerTopology struct {
 	streamChunkHandler  StreamChunkHandler
 	dispatcher          *dispatcher.Dispatcher
 	inboundPeerReachable bool
+	forwardOnly          bool
+	relayPolicy          *protocol.RelayPolicyPayload
+	relayPolicyMu        sync.RWMutex
 	onStatusChange      func(types.NodeID, string) // SSE broadcast callback
 
 	cancelFuncs map[types.NodeID]context.CancelFunc
@@ -148,6 +152,7 @@ func New(cfg Config) *PeerTopology {
 		localName:            cfg.LocalName,
 		identity:             cfg.Identity,
 		inboundPeerReachable: cfg.InboundPeerReachable,
+		forwardOnly:          cfg.ForwardOnly,
 		peers:          make(map[types.NodeID]*Peer),
 		pending:        make(map[types.RequestID]chan *types.CapabilityResponse),
 		cancelFuncs:    make(map[types.NodeID]context.CancelFunc),
@@ -430,6 +435,18 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 	case protocol.MsgTypeMeshCall:
 		pt.handleMeshCall(senderID, msg)
 
+	case protocol.MsgTypeRelayPolicy:
+		var policy protocol.RelayPolicyPayload
+		if err := json.Unmarshal(msg.Payload, &policy); err == nil {
+			pt.relayPolicyMu.Lock()
+			pt.relayPolicy = &policy
+			pt.relayPolicyMu.Unlock()
+			pt.log.Printf("relay policy updated: status=%s", policy.Status)
+		} else {
+			pt.log.Printf("relay policy unmarshal error: %v", err)
+		}
+		return
+
 	case protocol.MsgTypeStreamChunk, protocol.MsgTypeSessionEvent:
 		pt.mu.RLock()
 		h := pt.streamChunkHandler
@@ -442,6 +459,35 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 
 	case protocol.MsgTypeActionRequest:
 		pt.log.Printf("received action.request from %s: cap=%s", senderID, msg.Capability)
+		// Forward-Only mode: reject any request targeting the local node
+		if pt.forwardOnly {
+			targetIsLocal := msg.TargetNodeID == "" || msg.TargetNodeID == pt.localID
+			if targetIsLocal {
+				pt.log.Printf("FORWARD-ONLY: rejecting action.request %s from %s", msg.Capability, senderID)
+				errResp := &types.CapabilityResponse{
+					RequestID: msg.RequestID,
+					OK:        false,
+					Error:     &types.CoreError{Code: "HUB_MODE_REJECTED", Message: "this node is in forward-only mode and does not execute capabilities"},
+				}
+				resultMsg := protocol.NewActionResponse(errResp)
+				data, _ := resultMsg.MarshalJSON()
+				pt.mu.RLock()
+				p, peerFound := pt.peers[senderID]
+				if peerFound {
+					p.mu.RLock()
+					writeCh2 := p.writeCh
+					p.mu.RUnlock()
+					if writeCh2 != nil {
+						select {
+						case writeCh2 <- data:
+						default:
+						}
+					}
+				}
+				pt.mu.RUnlock()
+				return
+			}
+		}
 		// A forwarded capability request from a peer. Dispatch locally.
 		if pt.dispatcher != nil {
 			req := &types.CapabilityRequest{
@@ -514,6 +560,31 @@ func (pt *PeerTopology) handleMeshCall(senderID types.NodeID, msg *protocol.Mess
 		return
 	}
 
+	// Forward-Only mode: reject any request targeting the local node
+	if pt.forwardOnly {
+		targetIsLocal := msg.TargetNodeID == "" || msg.TargetNodeID == pt.localID
+		if targetIsLocal {
+			pt.log.Printf("FORWARD-ONLY: rejecting mesh.call %s from %s — hub does not execute capabilities", msg.Capability, senderID)
+			errResp := &types.CapabilityResponse{
+				RequestID: msg.RequestID,
+				OK:        false,
+				Error:     &types.CoreError{Code: "HUB_MODE_REJECTED", Message: "this node is in forward-only mode and does not execute capabilities"},
+			}
+			resultMsg := protocol.NewMeshResult(errResp)
+			data, _ := resultMsg.MarshalJSON()
+			peer.mu.RLock()
+			writeCh := peer.writeCh
+			peer.mu.RUnlock()
+			if writeCh != nil {
+				select {
+				case writeCh <- data:
+				default:
+				}
+			}
+			return
+		}
+	}
+
 	req := &types.CapabilityRequest{
 		RequestID:    msg.RequestID,
 		PluginID:     msg.PluginID,
@@ -548,6 +619,36 @@ func (pt *PeerTopology) handleMeshCall(senderID types.NodeID, msg *protocol.Mess
 	case writeCh <- data:
 	default:
 		pt.log.Printf("mesh.call result for %s - write channel full for %s", msg.RequestID, senderID)
+	}
+}
+
+// BroadcastPolicy sends a relay policy update to all connected peers.
+// Used by hub nodes to inform leaves of load/capacity changes.
+func (pt *PeerTopology) BroadcastPolicy(payload *protocol.RelayPolicyPayload) {
+	data, _ := json.Marshal(payload)
+	msg := &protocol.Message{
+		Type:    protocol.MsgTypeRelayPolicy,
+		Payload: data,
+	}
+	msgData, _ := msg.MarshalJSON()
+
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+
+	for _, peer := range pt.peers {
+		if peer.ID == pt.localID {
+			continue
+		}
+		peer.mu.RLock()
+		ch := peer.writeCh
+		peer.mu.RUnlock()
+		if ch != nil {
+			select {
+			case ch <- msgData:
+			default:
+				pt.log.Printf("policy broadcast to %s: channel full", peer.ID)
+			}
+		}
 	}
 }
 
