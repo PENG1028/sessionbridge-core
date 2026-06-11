@@ -82,8 +82,10 @@ type Peer struct {
 	mu      sync.RWMutex
 
 	cipher *crypto.SessionCipher // AES-256-GCM; nil = plaintext
+	oldCipher *crypto.SessionCipher // previous cipher during rotation grace period
 
 	ephemeralPriv *ecdh.PrivateKey // local ephemeral key for key exchange
+	ephCreatedAt  time.Time        // when ephemeral key was created (for rotation)
 	transitOnly   bool             // true = transit trust mode (no local execution)
 }
 
@@ -1479,5 +1481,148 @@ func (pt *PeerTopology) handleKeyExchange(senderID types.NodeID, payload json.Ra
 	}
 
 	peer.SetCipher(ciph)
+	peer.ephCreatedAt = time.Now()
 	pt.log.Printf("key exchange: cipher established for %s", senderID)
 }
+
+// ── Key Rotation ─────────────────────────────────────────────────────────
+
+// StartKeyRotation starts a goroutine that periodically rotates the session key.
+// The interval is typically 15 minutes.
+func (pt *PeerTopology) StartKeyRotation(peerID types.NodeID, interval time.Duration, ctx context.Context) {
+	if interval <= 0 {
+		interval = 15 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			pt.log.Printf("key rotation: rotating key for %s", peerID)
+			pt.rotateSessionKey(peerID)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// rotateSessionKey generates a new ephemeral key and sends key.rotate to the peer.
+func (pt *PeerTopology) rotateSessionKey(peerID types.NodeID) {
+	pt.mu.RLock()
+	peer, ok := pt.peers[peerID]
+	pt.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	localKey, err := crypto.GenerateEphemeralKey()
+	if err != nil {
+		pt.log.Printf("key rotation: generate key: %v", err)
+		return
+	}
+
+	peer.mu.Lock()
+	// Save old cipher for grace period
+	if peer.cipher != nil {
+		peer.oldCipher = peer.cipher
+	}
+	peer.ephemeralPriv = localKey
+	peer.ephCreatedAt = time.Now()
+	peer.mu.Unlock()
+
+	// Send new public key
+	pubBytes := localKey.PublicKey().Bytes()
+	payload, _ := json.Marshal(map[string]interface{}{
+		"publicKey": pubBytes,
+	})
+	keyMsg := &protocol.Message{
+		Type:    protocol.MsgTypeKeyRotate,
+		Payload: payload,
+	}
+	data, err := keyMsg.MarshalJSON()
+	if err != nil {
+		return
+	}
+
+	// Clear old cipher after grace period (5 seconds)
+	time.AfterFunc(5*time.Second, func() {
+		peer.mu.Lock()
+		peer.oldCipher = nil
+		peer.mu.Unlock()
+	})
+
+	// Send through write channel
+	peer.mu.RLock()
+	writeCh := peer.writeCh
+	peer.mu.RUnlock()
+	if writeCh == nil {
+		pt.inboundMu.RLock()
+		writeCh = pt.inboundWriters[peerID]
+		pt.inboundMu.RUnlock()
+	}
+	if writeCh != nil {
+		select {
+		case writeCh <- data:
+			pt.log.Printf("key rotation: sent to %s", peerID)
+		default:
+			pt.log.Printf("key rotation: write channel full for %s", peerID)
+		}
+	}
+}
+
+// handleKeyRotate processes an incoming key.rotate message.
+func (pt *PeerTopology) handleKeyRotate(senderID types.NodeID, payload json.RawMessage) {
+	var msg struct {
+		PublicKey []byte `json:"publicKey"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil || len(msg.PublicKey) != 32 {
+		pt.log.Printf("key rotation: invalid payload from %s", senderID)
+		return
+	}
+
+	pt.mu.RLock()
+	peer, ok := pt.peers[senderID]
+	pt.mu.RUnlock()
+	if !ok {
+		return
+	}
+
+	remotePub, err := ecdh.X25519().NewPublicKey(msg.PublicKey)
+	if err != nil {
+		pt.log.Printf("key rotation: invalid public key: %v", err)
+		return
+	}
+
+	peer.mu.Lock()
+	localPriv := peer.ephemeralPriv
+	peer.mu.Unlock()
+
+	if localPriv == nil {
+		pt.log.Printf("key rotation: no local ephemeral key for %s", senderID)
+		return
+	}
+
+	ciph, err := crypto.NewSessionCipher(localPriv, remotePub)
+	if err != nil {
+		pt.log.Printf("key rotation: create cipher: %v", err)
+		return
+	}
+
+	peer.mu.Lock()
+	if peer.cipher != nil {
+		peer.oldCipher = peer.cipher
+	}
+	peer.cipher = ciph
+	peer.mu.Unlock()
+
+	// Clear old cipher after grace period
+	time.AfterFunc(5*time.Second, func() {
+		peer.mu.Lock()
+		peer.oldCipher = nil
+		peer.mu.Unlock()
+	})
+
+	pt.log.Printf("key rotation: key rotated for %s", senderID)
+}
+

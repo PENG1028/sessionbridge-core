@@ -47,8 +47,9 @@ const (
 	MsgTypeNodeConnected    = "node.connected"
 	MsgTypeNodeDisconnected = "node.disconnected"
 
-	// Encryption — ephemeral key exchange for AES-256-GCM.
+	// Encryption — ephemeral key exchange and rotation for AES-256-GCM.
 	MsgTypeKeyExchange = "key.exchange"
+	MsgTypeKeyRotate   = "key.rotate"
 )
 
 // Message is the universal WebSocket message envelope.
