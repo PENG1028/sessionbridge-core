@@ -39,6 +39,8 @@ type Config struct {
 	Peers     []PeerConfig
 	InboundPeerReachable bool // set at startup: can this Core accept /peer/ws?
 	ForwardOnly           bool // true = hub mode: route only, never execute locally
+	EnableDiscovery       bool // true = enable LAN discovery (UDP multicast)
+	DiscoveryPort         int  // port for discovery (default 9090)
 }
 
 // PeerConfig describes a remote peer to connect to.
@@ -142,6 +144,9 @@ type PeerTopology struct {
 	// Used by forward() when no outbound connection exists.
 	inboundWriters map[types.NodeID]chan []byte
 	inboundMu      sync.RWMutex
+
+	// LAN discovery — nil when discovery is disabled.
+	discoverer *Discoverer
 }
 
 // New creates a PeerTopology. The local node is registered automatically
@@ -171,8 +176,46 @@ func New(cfg Config) *PeerTopology {
 		pt.peers[p.ID] = newPeer(p.ID, p.Address, p.Tags, StatusDisconnected)
 	}
 
+
+		// Start LAN discovery if enabled
+		if cfg.EnableDiscovery && cfg.Identity != nil {
+			port := cfg.DiscoveryPort
+			if port == 0 {
+				port = 9090 // default Core port
+			}
+			d := NewDiscoverer(cfg.LocalID, cfg.Identity.Fingerprint, port)
+			d.SetCallback(func(peer DiscoveredPeer) {
+				pt.onDiscoveredPeer(peer)
+			})
+			if err := d.Start(); err == nil {
+				pt.discoverer = d
+			} else {
+				pt.log.Printf("discovery start: %v", err)
+			}
+		}
 	return pt
 }
+
+// onDiscoveredPeer is called when a new peer is found via LAN discovery.
+func (pt *PeerTopology) onDiscoveredPeer(peer DiscoveredPeer) {
+	pt.mu.Lock()
+	existing, known := pt.peers[peer.NodeID]
+	pt.mu.Unlock()
+
+	if known && existing.Address != peer.Address {
+		pt.mu.Lock()
+		pt.peers[peer.NodeID].Address = peer.Address
+		pt.mu.Unlock()
+		pt.log.Printf("discovery: updated address for known peer %s -> %s", peer.NodeID, peer.Address)
+		return
+	}
+	if known {
+		return
+	}
+
+	pt.log.Printf("discovery: new peer %s at %s (fp=%s) — trust store not checked automatically", peer.NodeID, peer.Address, peer.Fingerprint)
+}
+
 
 // SetStreamChunkHandler registers the handler for incoming stream.chunk and
 // session.event messages from peers. When nil (default), the messages are

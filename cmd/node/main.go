@@ -162,6 +162,7 @@ func main() {
 		Peers:                peers,
 		InboundPeerReachable: inboundPeerReachable,
 		ForwardOnly:          cfg.Node.HubMode || cfg.Node.Role == "hub",
+		EnableDiscovery:      os.Getenv("SESSIONNODE_DISCOVERY") == "1",
 	}
 	topo := topology.New(topoCfg)
 	// Forward stream chunks and session events from peers to local subscribers.
