@@ -11,6 +11,7 @@ import (
 	"github.com/PENG1028/sessionbridge-core/internal/logs"
 	"github.com/PENG1028/sessionbridge-core/internal/mesh"
 	"github.com/PENG1028/sessionbridge-core/internal/notify"
+	"github.com/PENG1028/sessionbridge-core/internal/oplog"
 	"github.com/PENG1028/sessionbridge-core/internal/plan"
 	"github.com/PENG1028/sessionbridge-core/internal/platform"
 	"github.com/PENG1028/sessionbridge-core/internal/process"
@@ -81,6 +82,10 @@ type Deps struct {
 	// AuditStore is the in-memory store for audit.list.
 	// When nil, audit.list returns empty results.
 	AuditStore *logs.AuditStore
+	// OpLog is the persistent operation log for restart recovery.
+	OpLog *oplog.Store
+	// RollbackEngine provides rollback/dry-run/verify for logged operations.
+	RollbackEngine *oplog.RollbackEngine
 	// UpdateManager holds update source, policy, and status.
 	// When nil, update.* capabilities degrade gracefully.
 	UpdateManager *update.Manager
@@ -312,4 +317,12 @@ func (r *Registry) registerDefaults() {
 	r.Register("update.check", updateCheck)
 	r.Register("update.plan", updatePlan)
 	r.Register("update.ignore", updateIgnore)
+
+	// Operation Log — query, rollback, verify
+	r.Register("operations.list", operationsList)
+	r.Register("operations.get", operationsGet)
+	r.Register("operations.dryRun", operationsDryRun)
+	r.Register("operations.rollback", operationsRollback)
+	r.Register("operations.rollbackRange", operationsRollbackRange)
+	r.Register("operations.verify", operationsVerify)
 }

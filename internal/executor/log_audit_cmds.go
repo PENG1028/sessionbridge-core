@@ -132,6 +132,32 @@ func collectLogEntries(deps *Deps, source string, pluginID string, level string,
 }
 
 func collectAuditEntries(deps *Deps, eventType string, actor string, target string, limit int) []auditEntry {
+	// Prefer OpLog when available — it survives restarts.
+	if deps != nil && deps.OpLog != nil {
+		filter := types.OpFilter{
+			Classes:    []types.OpClass{types.OpClassContent, types.OpClassArtifact, types.OpClassState},
+			Capability: eventType,
+			TargetNode: target,
+			Limit:      limit,
+		}
+		ops := deps.OpLog.Query(filter)
+		out := make([]auditEntry, len(ops))
+		for i, op := range ops {
+			out[i] = auditEntry{
+				AuditID:   string(op.OpID),
+				Timestamp: op.Timestamp,
+				EventType: "capability.call",
+				Actor:     op.Actor.Type + ":" + op.Actor.ID,
+				Target:    op.Capability,
+				Metadata: map[string]interface{}{
+					"class":      string(op.Class),
+					"targetNode": op.TargetNode,
+				},
+			}
+		}
+		return out
+	}
+
 	if deps == nil || deps.AuditStore == nil {
 		return []auditEntry{}
 	}

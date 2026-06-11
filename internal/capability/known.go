@@ -112,6 +112,14 @@ var KnownCapabilities = map[string]bool{
 	"update.plan":       true,
 	"update.ignore":     true,
 
+	// Operation Log
+	"operations.list":           true,
+	"operations.get":            true,
+	"operations.dryRun":         true,
+	"operations.rollback":       true,
+	"operations.rollbackRange":  true,
+	"operations.verify":         true,
+
 	// Network
 	"network.connect": true,
 	"network.listen":  true,
