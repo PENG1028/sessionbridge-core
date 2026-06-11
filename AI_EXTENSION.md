@@ -36,15 +36,18 @@ node.peer.*        × 5    // list, info, reconnect, disconnect, revoke
 node.identity.*    × 1    // get
 node.invite.*      × 4    // create, list, revoke, accept
 node.reachability  × 1    // check
+input.*            × 2    // keyboard, mouse  <- 新增
+input.*            x 2    // keyboard, mouse  <- 新增
 session.history.*  × 6    // getPolicy, setPolicy, stats, list, clear.plan, clear.execute
 logs.* / audit.*   × 3    // tail, query, list
 task.*             × 2    // list, info
 run.*              × 6    // create, list, info, stop, updatePolicy, attach
 operations.*       × 6    // list, get, dryRun, rollback, rollbackRange, verify
 update.*           × 8    // status, source.get/set, policy.get/set, check, plan, ignore
-desktop.*          × 3    // clipboard.get, clipboard.set, screenshot  ← 新增
+desktop.*          × 5    // clipboard.get, clipboard.set, screenshot, click, type
+input.*            × 2    // keyboard, mouse  <- 新增
 ──────────────────────────────────────────
-总计               89
+总计               93
 ```
 
 ### 对比修正
@@ -86,9 +89,9 @@ Shell 命令         ✅      session.* + spawn    已在
 剪贴板操作         ✅      desktop.clipboard.*   ✅ 本文新增
 屏幕截图           ✅      desktop.screenshot    ✅ 本文新增
 ────────────────────────────────────────────────────────
-桌面 GUI 控制      ❌      desktop.click        未实现
-桌面键盘输入       ❌      desktop.type         未实现
-桌面鼠标操作       ❌      desktop.mouse        未实现
+桌面 GUI 控制      ✅      desktop.click        ✅ 已实现
+桌面键盘输入       ✅      desktop.type         ✅ 已实现
+桌面鼠标操作       ✅      input.mouse          ✅ 已实现
 浏览器控制         ❌      browser.*            未实现
 无障碍树读取       ❌      perception.acc       未实现
 OCR                ❌      perception.ocr       未实现
@@ -249,7 +252,7 @@ Puppeteer/Playwright 方案：   CDP 直接方案：
 | `desktop.clipboard.get` | ✅ 已实现 | `internal/executor/desktop_cmds.go` |
 | `desktop.clipboard.set` | ✅ 已实现 | 同上 |
 | `desktop.screenshot` | ✅ 已实现 | 同上 |
-| `desktop.click` | ⏳ 待实现 | 可加在 `desktop_cmds.go` |
+| `desktop.click` | ✅ 已实现 | `desktop_cmds.go` |
 
 ### 中期（2-4 周）
 
