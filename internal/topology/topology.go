@@ -87,6 +87,10 @@ type Peer struct {
 	ephemeralPriv *ecdh.PrivateKey // local ephemeral key for key exchange
 	ephCreatedAt  time.Time        // when ephemeral key was created (for rotation)
 	transitOnly   bool             // true = transit trust mode (no local execution)
+
+	e2ePriv    *ecdh.PrivateKey    // E2E X25519 private key (for blind relay)
+	remoteE2E  *ecdh.PublicKey     // peer's E2E public key
+	e2eCipher  *crypto.SessionCipher // E2E cipher (hub can't decrypt)
 }
 
 func newPeer(id types.NodeID, address string, tags []string, status string) *Peer {
@@ -450,8 +454,14 @@ func (pt *PeerTopology) forward(peer *Peer, req *types.CapabilityRequest) (*type
 	// only if no trust store is configured.
 	msg.ActorType = "node"
 
-	// Encrypt payload if peer has a session cipher
-	if peer.cipher != nil && len(msg.Payload) > 0 {
+	// Encrypt payload — use E2E cipher if forwarding to a different target
+	useE2E := peer.e2eCipher != nil && req.TargetNodeID != "" && req.TargetNodeID != peer.ID
+	if useE2E && len(msg.Payload) > 0 {
+		ct, nonce := peer.e2eCipher.Encrypt(msg.Payload)
+		msg.EncryptedPayload = ct
+		msg.EncryptNonce = nonce
+		msg.Payload = nil
+	} else if peer.cipher != nil && len(msg.Payload) > 0 {
 		ct, nonce := peer.cipher.Encrypt(msg.Payload)
 		msg.EncryptedPayload = ct
 		msg.EncryptNonce = nonce
@@ -512,6 +522,37 @@ func (pt *PeerTopology) HandleMessage(senderID types.NodeID, data []byte) {
 				msg.EncryptNonce = nil
 			}
 		}
+	}
+
+	// Blind relay for E2E encrypted messages: if we can't decrypt and target is elsewhere, forward raw
+	if len(msg.EncryptedPayload) > 0 && msg.TargetNodeID != "" && msg.TargetNodeID != pt.localID {
+		pt.log.Printf("E2E blind relay: forwarding encrypted message to %s", msg.TargetNodeID)
+		pt.mu.RLock()
+		targetPeer, targetFound := pt.peers[msg.TargetNodeID]
+		pt.mu.RUnlock()
+		if targetFound {
+			var writeCh chan []byte
+			targetPeer.mu.RLock()
+			writeCh = targetPeer.writeCh
+			targetPeer.mu.RUnlock()
+			if writeCh == nil {
+				pt.inboundMu.RLock()
+				writeCh = pt.inboundWriters[msg.TargetNodeID]
+				pt.inboundMu.RUnlock()
+			}
+			if writeCh != nil {
+				// Forward the raw data — unchanged, hub can't read it
+				select {
+				case writeCh <- data:
+					return
+				default:
+					pt.log.Printf("E2E relay: write channel full for %s", msg.TargetNodeID)
+				}
+			} else {
+				pt.log.Printf("E2E relay: no write channel for %s", msg.TargetNodeID)
+			}
+		}
+		// Can't forward, process as normal (will likely fail decryption)
 	}
 
 	switch msg.Type {
@@ -1392,8 +1433,21 @@ func (pt *PeerTopology) initiateKeyExchange(peer *Peer, writeCh chan []byte) {
 
 	// Send our public key
 	pubBytes := localKey.PublicKey().Bytes()
+
+	// Generate and include E2E public key
+	var e2ePubBytes []byte
+	e2eKey, e2eErr := crypto.GenerateEphemeralKey()
+	if e2eErr == nil {
+		peer.mu.Lock()
+		peer.e2ePriv = e2eKey
+		peer.mu.Unlock()
+		e2ePubBytes = e2eKey.PublicKey().Bytes()
+	} else {
+		pt.log.Printf("key exchange: generate e2e key: %v", e2eErr)
+	}
 	payload, _ := json.Marshal(map[string]interface{}{
 		"publicKey": pubBytes,
+		"e2ePublicKey": e2ePubBytes,
 	})
 	keyMsg := &protocol.Message{
 		Type:    protocol.MsgTypeKeyExchange,
@@ -1416,7 +1470,8 @@ func (pt *PeerTopology) initiateKeyExchange(peer *Peer, writeCh chan []byte) {
 // handleKeyExchange processes an incoming key.exchange message.
 func (pt *PeerTopology) handleKeyExchange(senderID types.NodeID, payload json.RawMessage) {
 	var msg struct {
-		PublicKey []byte `json:"publicKey"`
+		PublicKey  []byte `json:"publicKey"`
+		E2EPublicKey []byte `json:"e2ePublicKey"`
 	}
 	if err := json.Unmarshal(payload, &msg); err != nil || len(msg.PublicKey) != 32 {
 		pt.log.Printf("key exchange: invalid payload from %s", senderID)
@@ -1482,6 +1537,24 @@ func (pt *PeerTopology) handleKeyExchange(senderID types.NodeID, payload json.Ra
 
 	peer.SetCipher(ciph)
 	peer.ephCreatedAt = time.Now()
+
+	// Establish E2E cipher if both sides have E2E keys
+	if peer.e2ePriv != nil && len(msg.E2EPublicKey) == 32 {
+		e2ePub, err := ecdh.X25519().NewPublicKey(msg.E2EPublicKey)
+		if err == nil {
+			peer.mu.Lock()
+			peer.remoteE2E = e2ePub
+			peer.mu.Unlock()
+			e2eCiph, err := crypto.NewSessionCipher(peer.e2ePriv, e2ePub)
+			if err == nil {
+				peer.mu.Lock()
+				peer.e2eCipher = e2eCiph
+				peer.mu.Unlock()
+				pt.log.Printf("key exchange: E2E cipher established for %s", senderID)
+			}
+		}
+	}
+
 	pt.log.Printf("key exchange: cipher established for %s", senderID)
 }
 
@@ -1574,7 +1647,8 @@ func (pt *PeerTopology) rotateSessionKey(peerID types.NodeID) {
 // handleKeyRotate processes an incoming key.rotate message.
 func (pt *PeerTopology) handleKeyRotate(senderID types.NodeID, payload json.RawMessage) {
 	var msg struct {
-		PublicKey []byte `json:"publicKey"`
+		PublicKey  []byte `json:"publicKey"`
+		E2EPublicKey []byte `json:"e2ePublicKey"`
 	}
 	if err := json.Unmarshal(payload, &msg); err != nil || len(msg.PublicKey) != 32 {
 		pt.log.Printf("key rotation: invalid payload from %s", senderID)
