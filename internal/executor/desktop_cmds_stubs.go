@@ -22,3 +22,15 @@ func writeClipboardWindows(_ string) error {
 func captureScreenWindows(_ int) (*image.RGBA, error) {
 	return nil, fmt.Errorf("screenshot (windows) not available on this platform")
 }
+
+func keyboardWindows(_ string, _ []string) error {
+	return fmt.Errorf("keyboard (windows) not available on this platform")
+}
+
+func mouseWindows(_ string, _, _ int, _ string, _ int) error {
+	return fmt.Errorf("mouse (windows) not available on this platform")
+}
+
+func typeTextWindows(_ string) error {
+	return fmt.Errorf("text input (windows) not available on this platform")
+}

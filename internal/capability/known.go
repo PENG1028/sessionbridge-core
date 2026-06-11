@@ -124,6 +124,10 @@ var KnownCapabilities = map[string]bool{
 	"desktop.clipboard.get": true,
 	"desktop.clipboard.set": true,
 	"desktop.screenshot":    true,
+	"desktop.click":         true,
+	"desktop.type":          true,
+	"input.keyboard":        true,
+	"input.mouse":           true,
 
 	// Network
 	"network.connect": true,

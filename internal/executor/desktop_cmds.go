@@ -262,3 +262,260 @@ func captureScreenLinux(_ int) (*image.RGBA, error) {
 
 	return nil, fmt.Errorf("no screenshot tool found (install 'import' from ImageMagick, 'gnome-screenshot', or 'screencapture')")
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// input.keyboard — send keystrokes
+// ────────────────────────────────────────────────────────────────────────────
+
+type keyboardInputPayload struct {
+	Action string   `json:"action"` // "tap" | "press" | "release"
+	Keys   []string `json:"keys"`   // key names: "a", "ctrl", "enter", "f1", etc.
+}
+
+func keyboardInput(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var p keyboardInputPayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	if len(p.Keys) == 0 {
+		return nil, fmt.Errorf("keys required")
+	}
+
+	return map[string]interface{}{"status": "ok"}, keyboardInputImpl(p.Action, p.Keys)
+}
+
+func keyboardInputImpl(action string, keys []string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return keyboardWindows(action, keys)
+	case "darwin":
+		return keyboardMacOS(action, keys)
+	case "linux":
+		return keyboardLinux(action, keys)
+	default:
+		return fmt.Errorf("keyboard input not supported on %s", runtime.GOOS)
+	}
+}
+
+// ── macOS keyboard ─────────────────────────────────────────────────────────
+
+func keyboardMacOS(action string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	switch action {
+	case "tap":
+		if len(keys) == 1 && isSimpleChar(keys[0]) {
+			return exec.Command("osascript", "-e",
+				`tell app "System Events" to keystroke "`+escapeAppleScript(keys[0])+`"`).Run()
+		}
+		// Key code or combination
+		return exec.Command("osascript", "-e",
+			`tell app "System Events" to key code `+macOSKeyCode(keys[0])).Run()
+	default:
+		return fmt.Errorf("keyboard action %q not supported on macOS (use 'tap')", action)
+	}
+}
+
+func isSimpleChar(s string) bool {
+	if len(s) != 1 {
+		return false
+	}
+	b := s[0]
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == ' ' || b == '-' || b == '_'
+}
+
+func escapeAppleScript(s string) string {
+	r := strings.NewReplacer("\\", "\\\\", `"`, `\"`, "\n", "\\n")
+	return r.Replace(s)
+}
+
+func macOSKeyCode(key string) string {
+	// Common key codes for macOS
+	codes := map[string]string{
+		"enter": "36", "return": "36", "tab": "48", "space": "49",
+		"delete": "51", "backspace": "51", "escape": "53", "esc": "53",
+		"home": "115", "end": "119", "pageup": "116", "pagedown": "121",
+		"up": "126", "down": "125", "left": "123", "right": "124",
+		"f1": "122", "f2": "120", "f3": "99", "f4": "118",
+		"f5": "96", "f6": "97", "f7": "98", "f8": "100",
+		"f9": "101", "f10": "109", "f11": "103", "f12": "111",
+	}
+	if code, ok := codes[key]; ok {
+		return code
+	}
+	return "0" // fallback
+}
+
+// ── Linux keyboard ─────────────────────────────────────────────────────────
+
+func keyboardLinux(action string, keys []string) error {
+	tool := pickTool("xdotool")
+	if tool == "" {
+		return fmt.Errorf("neither xdotool found for keyboard input")
+	}
+	switch action {
+	case "tap":
+		args := []string{"key"}
+		args = append(args, keys...)
+		return exec.Command(tool, args...).Run()
+	default:
+		return fmt.Errorf("keyboard action %q not supported on Linux (use 'tap')", action)
+	}
+}
+
+func pickTool(names ...string) string {
+	for _, name := range names {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// input.mouse — mouse operations
+// ────────────────────────────────────────────────────────────────────────────
+
+type mouseInputPayload struct {
+	Action string `json:"action"` // "move" | "click" | "scroll" | "press" | "release"
+	X      int    `json:"x,omitempty"`
+	Y      int    `json:"y,omitempty"`
+	Button string `json:"button,omitempty"` // "left" | "right" | "middle"
+	Amount int    `json:"amount,omitempty"` // scroll lines
+}
+
+func mouseInput(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var p mouseInputPayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	return map[string]interface{}{"status": "ok"}, mouseInputImpl(p.Action, p.X, p.Y, p.Button, p.Amount)
+}
+
+func mouseInputImpl(action string, x, y int, button string, amount int) error {
+	switch runtime.GOOS {
+	case "windows":
+		return mouseWindows(action, x, y, button, amount)
+	case "darwin":
+		return mouseMacOS(action, x, y, button, amount)
+	case "linux":
+		return mouseLinux(action, x, y, button, amount)
+	default:
+		return fmt.Errorf("mouse input not supported on %s", runtime.GOOS)
+	}
+}
+
+// ── macOS mouse ────────────────────────────────────────────────────────────
+
+func mouseMacOS(action string, x, y int, button string, amount int) error {
+	switch action {
+	case "click":
+		return exec.Command("osascript", "-e",
+			fmt.Sprintf(`tell app "System Events" to click at {%d,%d}`, x, y)).Run()
+	default:
+		return fmt.Errorf("mouse action %q not supported on macOS", action)
+	}
+}
+
+// ── Linux mouse ────────────────────────────────────────────────────────────
+
+func mouseLinux(action string, x, y int, button string, amount int) error {
+	tool := pickTool("xdotool")
+	if tool == "" {
+		return fmt.Errorf("xdotool not found for mouse input")
+	}
+	switch action {
+	case "move":
+		return exec.Command(tool, "mousemove", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y)).Run()
+	case "click":
+		btn := "1" // left
+		switch button {
+		case "right":
+			btn = "3"
+		case "middle":
+			btn = "2"
+		}
+		if x >= 0 && y >= 0 {
+			exec.Command(tool, "mousemove", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y)).Run()
+		}
+		return exec.Command(tool, "click", btn).Run()
+	case "scroll":
+		dir := "--"
+		if amount > 0 {
+			dir = "--clearmodifiers"
+		}
+		return exec.Command(tool, "click", dir, fmt.Sprintf("%d", amount)).Run()
+	default:
+		return fmt.Errorf("mouse action %q not supported on Linux", action)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// desktop.click — convenience: move mouse then click
+// ────────────────────────────────────────────────────────────────────────────
+
+type desktopClickPayload struct {
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Button string `json:"button,omitempty"`
+}
+
+func desktopClick(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var p desktopClickPayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	return map[string]interface{}{"status": "ok"}, mouseInputImpl("click", p.X, p.Y, p.Button, 0)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// desktop.type — type text via keyboard
+// ────────────────────────────────────────────────────────────────────────────
+
+type desktopTypePayload struct {
+	Text string `json:"text"`
+}
+
+func desktopType(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
+	var p desktopTypePayload
+	if err := decodePayload(req.Payload, &p); err != nil {
+		return nil, fmt.Errorf("invalid payload: %w", err)
+	}
+	if p.Text == "" {
+		return nil, fmt.Errorf("text required")
+	}
+	return map[string]interface{}{"status": "ok"}, typeTextImpl(p.Text)
+}
+
+func typeTextImpl(text string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return typeTextWindows(text)
+	case "darwin":
+		return typeTextMacOS(text)
+	case "linux":
+		return typeTextLinux(text)
+	default:
+		return fmt.Errorf("text input not supported on %s", runtime.GOOS)
+	}
+}
+
+// ── macOS type text ────────────────────────────────────────────────────────
+
+func typeTextMacOS(text string) error {
+	escaped := escapeAppleScript(text)
+	return exec.Command("osascript", "-e",
+		`tell app "System Events" to keystroke "`+escaped+`"`).Run()
+}
+
+// ── Linux type text ────────────────────────────────────────────────────────
+
+func typeTextLinux(text string) error {
+	tool := pickTool("xdotool")
+	if tool == "" {
+		return fmt.Errorf("xdotool not found for text input")
+	}
+	cmd := exec.Command(tool, "type", "--", text)
+	return cmd.Run()
+}

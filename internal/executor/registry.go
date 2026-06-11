@@ -312,6 +312,13 @@ func (r *Registry) registerCore() {
 	r.Register("operations.verify", operationsVerify)
 
 	// Desktop — AI 电脑操作基础能力
+	r.Register("desktop.clipboard.get", clipboardGet)
+	r.Register("desktop.clipboard.set", clipboardSet)
+	r.Register("desktop.screenshot", screenshotCapture)
+	r.Register("input.keyboard", keyboardInput)
+	r.Register("input.mouse", mouseInput)
+	r.Register("desktop.click", desktopClick)
+	r.Register("desktop.type", desktopType)
 }
 
 // registerConditional registers capabilities based on RegistryConfig flags.
