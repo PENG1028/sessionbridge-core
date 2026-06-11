@@ -129,7 +129,6 @@ func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
 	cs := resolver.CheckCapability(req.Capability)
 	if !cs.Supported {
 		r.recordLog(req, "error", fmt.Sprintf("capability %q unsupported on %s", req.Capability, plat.OS))
-		r.recordAudit(req, "error", fmt.Sprintf("unsupported on %s", plat.OS))
 		return nil, &types.CoreError{
 			Code:    "CAPABILITY_UNSUPPORTED_ON_PLATFORM",
 			Message: fmt.Sprintf("capability %q is not supported on %s", req.Capability, plat.OS),
@@ -139,17 +138,14 @@ func (r *Registry) Execute(req *types.CapabilityRequest) (interface{}, error) {
 	handler, ok := r.handlers[req.Capability]
 	if !ok {
 		r.recordLog(req, "error", fmt.Sprintf("unknown capability: %q", req.Capability))
-		r.recordAudit(req, "error", "unknown capability")
 		return nil, fmt.Errorf("unknown capability: %q", req.Capability)
 	}
 
 	result, err := handler(req, r.deps)
 	if err != nil {
 		r.recordLog(req, "error", err.Error())
-		r.recordAudit(req, "error", err.Error())
 	} else {
 		r.recordLog(req, "info", "ok")
-		r.recordAudit(req, "ok", "")
 	}
 	return result, err
 }
@@ -171,33 +167,6 @@ func (r *Registry) recordLog(req *types.CapabilityRequest, level, msg string) {
 	})
 }
 
-func (r *Registry) recordAudit(req *types.CapabilityRequest, outcome, detail string) {
-	if r.deps.AuditStore == nil {
-		return
-	}
-	if observabilityCapabilities[req.Capability] {
-		return
-	}
-	actor := req.Actor.Type + ":" + req.Actor.ID
-	target := string(req.PluginID) + "/" + req.Capability
-	meta := map[string]interface{}{
-		"requestId": string(req.RequestID),
-	}
-	if req.TargetNodeID != "" {
-		meta["targetNodeId"] = string(req.TargetNodeID)
-	}
-	if detail != "" {
-		meta["detail"] = detail
-	}
-	r.deps.AuditStore.Record(logs.AuditRecord{
-		Timestamp: time.Now().UnixMilli(),
-		EventType: "capability.call",
-		Actor:     actor,
-		Target:    target,
-		Outcome:   outcome,
-		Metadata:  meta,
-	})
-}
 
 func extractSessionIDFromPayload(payload json.RawMessage) string {
 	if len(payload) == 0 {

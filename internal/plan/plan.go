@@ -163,8 +163,12 @@ func (s *PlanStore) Get(id string) *Plan {
 	return s.plans[id]
 }
 
-// List returns all plans.
+// List returns all plans. Triggers AutoExpire and Cleanup as a side effect
+// so expired/terminal plans don't accumulate indefinitely.
 func (s *PlanStore) List() []*Plan {
+	s.AutoExpire()
+	s.Cleanup(0) // use default cleanup age
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Plan, 0, len(s.plans))
@@ -211,4 +215,29 @@ func (s *PlanStore) AutoExpire() int {
 		}
 	}
 	return count
+}
+
+// defaultCleanupAge is the age after which terminal-state plans are removed.
+const defaultCleanupAge = 30 * time.Minute
+
+// Cleanup removes terminal-state plans (executed, denied, expired, failed)
+// that are older than maxAge. If maxAge <= 0, defaultCleanupAge is used.
+// Returns the number of removed plans.
+func (s *PlanStore) Cleanup(maxAge time.Duration) int {
+	if maxAge <= 0 {
+		maxAge = defaultCleanupAge
+	}
+	cutoff := time.Now().UnixMilli() - maxAge.Milliseconds()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var removed int
+	for id, p := range s.plans {
+		if p.IsTerminal() && p.UpdatedAt < cutoff {
+			delete(s.plans, id)
+			removed++
+		}
+	}
+	return removed
 }

@@ -3,8 +3,7 @@ package executor
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-
+	
 	"github.com/PENG1028/sessionbridge-core/pkg/types"
 )
 
@@ -91,14 +90,4 @@ func fsList(req *types.CapabilityRequest, deps *Deps) (interface{}, error) {
 	}, nil
 }
 
-// resolvePath resolves a relative path against the given base, returning an absolute path.
-func resolvePath(path, base string) (string, error) {
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
-	}
-	abs, err := filepath.Abs(filepath.Join(base, path))
-	if err != nil {
-		return "", err
-	}
-	return abs, nil
-}
+

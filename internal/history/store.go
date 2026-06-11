@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/PENG1028/sessionbridge-core/pkg/types"
+	"github.com/PENG1028/sessionbridge-core/internal/logs"
 )
 
 // defaultBaseDir is the default directory for disk-mode session history.
@@ -34,9 +35,9 @@ type sessionHistory struct {
 	dir       string // on-disk directory; empty = memory mode
 
 	// file handles for disk mode (lazily opened)
-	stdoutFile *os.File
-	stderrFile *os.File
-	eventsFile *os.File
+	stdoutWriter *logs.RotateWriter
+	stderrWriter *logs.RotateWriter
+	eventsWriter *logs.RotateWriter
 }
 
 // PluginEvent records a plugin lifecycle event (enable, disable, permission grant, etc.).
@@ -467,53 +468,51 @@ func (s *Store) filterEventsLocked(sh *sessionHistory, streamType string, fromSe
 }
 
 func (s *Store) writeDiskLocked(sh *sessionHistory, streamType, data string, evt types.HistoryEvent) {
-	// Write raw data to stream-specific log file
-	var f **os.File
+	// Write raw data to stream-specific log file via RotateWriter
+	var w **logs.RotateWriter
 	switch streamType {
 	case "stdout":
-		f = &sh.stdoutFile
+		w = &sh.stdoutWriter
 	case "stderr":
-		f = &sh.stderrFile
+		w = &sh.stderrWriter
 	default:
 		return
 	}
-	if *f == nil {
+	if *w == nil {
 		var err error
-		*f, err = os.OpenFile(filepath.Join(sh.dir, streamType+".log"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		*w, err = logs.NewRotateWriter(sh.dir, streamType+".log", 10*1024*1024, 5)
 		if err != nil {
 			return
 		}
 	}
-	(*f).WriteString(data)
+	(*w).Write([]byte(data))
 
 	// Write structured event to events.jsonl
 	s.writeEventJSONLocked(sh, evt)
 }
 
 func (s *Store) writeEventJSONLocked(sh *sessionHistory, evt types.HistoryEvent) {
-	if sh.eventsFile == nil {
+	if sh.eventsWriter == nil {
 		var err error
-		sh.eventsFile, err = os.OpenFile(filepath.Join(sh.dir, "events.jsonl"),
-			os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		sh.eventsWriter, err = logs.NewRotateWriter(sh.dir, "events.jsonl", 10*1024*1024, 5)
 		if err != nil {
 			return
 		}
 	}
 	line, _ := json.Marshal(evt)
-	sh.eventsFile.Write(line)
-	sh.eventsFile.WriteString("\n")
+	sh.eventsWriter.Write(line)
+	sh.eventsWriter.Write([]byte("\n"))
 }
 
 func (sh *sessionHistory) closeFilesLocked() {
-	for _, f := range []*os.File{sh.stdoutFile, sh.stderrFile, sh.eventsFile} {
-		if f != nil {
-			f.Close()
+	for _, w := range []*logs.RotateWriter{sh.stdoutWriter, sh.stderrWriter, sh.eventsWriter} {
+		if w != nil {
+			w.Close()
 		}
 	}
-	sh.stdoutFile = nil
-	sh.stderrFile = nil
-	sh.eventsFile = nil
+	sh.stdoutWriter = nil
+	sh.stderrWriter = nil
+	sh.eventsWriter = nil
 }
 
 func (sh *sessionHistory) removeDiskFilesLocked() {

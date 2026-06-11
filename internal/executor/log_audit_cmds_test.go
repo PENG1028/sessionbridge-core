@@ -400,7 +400,7 @@ func TestRegistryExecute_SkipsObservabilityCaps(t *testing.T) {
 	}
 }
 
-func TestRegistryExecute_RecordsAudit(t *testing.T) {
+func TestRegistryExecute_RecordsLog(t *testing.T) {
 	d := testDepsWithStores(t)
 	r := New(d)
 
@@ -409,19 +409,20 @@ func TestRegistryExecute_RecordsAudit(t *testing.T) {
 		t.Fatalf("system.info error: %v", err)
 	}
 
-	records := d.AuditStore.List("", "", "", 10)
-	if len(records) == 0 {
-		t.Fatal("expected at least 1 audit record")
+	// Executor records log entries (not audit — audit is handled by dispatcher)
+	entries := d.LogBuffer.Tail("core", "", 10)
+	if len(entries) == 0 {
+		t.Fatal("expected at least 1 log entry from executor")
 	}
 	found := false
-	for _, rec := range records {
-		if rec.EventType == "capability.call" && rec.Outcome == "ok" {
+	for _, entry := range entries {
+		if entry.Source == "core" && entry.Message != "" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected capability.call ok audit record, got: %+v", records)
+		t.Errorf("expected log entry, got: %+v", entries)
 	}
 }
 

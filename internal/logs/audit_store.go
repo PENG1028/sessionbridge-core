@@ -17,18 +17,37 @@ type AuditRecord struct {
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// AuditStore is a thread-safe in-memory store for audit records.
+// defaultAuditCapacity is the default maximum number of records kept in memory.
+const defaultAuditCapacity = 10000
+
+// AuditStore is a thread-safe ring buffer for audit records.
+// When at capacity, the oldest record is silently dropped.
 type AuditStore struct {
-	mu      sync.RWMutex
-	records []AuditRecord
+	mu       sync.RWMutex
+	records  []AuditRecord
+	capacity int
+	head     int // next write position
+	size     int // current number of entries
 }
 
-// NewAuditStore creates an empty audit store.
+// NewAuditStore creates an audit store with default capacity (10000).
 func NewAuditStore() *AuditStore {
-	return &AuditStore{}
+	return NewAuditStoreWithCapacity(defaultAuditCapacity)
+}
+
+// NewAuditStoreWithCapacity creates an audit store with the given capacity.
+func NewAuditStoreWithCapacity(capacity int) *AuditStore {
+	if capacity <= 0 {
+		capacity = defaultAuditCapacity
+	}
+	return &AuditStore{
+		records:  make([]AuditRecord, capacity),
+		capacity: capacity,
+	}
 }
 
 // Record adds an audit record. If AuditID is empty, a random one is generated.
+// If at capacity, the oldest record is silently dropped.
 func (s *AuditStore) Record(r AuditRecord) {
 	if r.AuditID == "" {
 		b := make([]byte, 8)
@@ -37,13 +56,18 @@ func (s *AuditStore) Record(r AuditRecord) {
 	}
 
 	s.mu.Lock()
-	s.records = append(s.records, r)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+
+	s.records[s.head] = r
+	s.head = (s.head + 1) % s.capacity
+	if s.size < s.capacity {
+		s.size++
+	}
 }
 
 // List returns audit records matching the given filters, up to limit.
 // limit is clamped to [1, 1000] with a default of 100.
-// Returns a copy of the internal data.
+// Returns a copy of the internal data, most recent first.
 func (s *AuditStore) List(eventType, actor, target string, limit int) []AuditRecord {
 	if limit <= 0 {
 		limit = 100
@@ -56,9 +80,9 @@ func (s *AuditStore) List(eventType, actor, target string, limit int) []AuditRec
 	defer s.mu.RUnlock()
 
 	var matched []AuditRecord
-	// Walk from most recent to oldest.
-	for i := len(s.records) - 1; i >= 0; i-- {
-		r := s.records[i]
+	for i := s.size - 1; i >= 0; i-- {
+		idx := (s.head - s.size + i + s.capacity) % s.capacity
+		r := s.records[idx]
 		if eventType != "" && r.EventType != eventType {
 			continue
 		}

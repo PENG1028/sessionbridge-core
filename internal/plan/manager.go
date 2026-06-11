@@ -121,3 +121,9 @@ func (m *Manager) ValidatePlan(planID string) error {
 	}
 	return nil
 }
+
+// Cleanup removes terminal-state plans older than maxAge.
+// Delegates to PlanStore.Cleanup and returns the count.
+func (m *Manager) Cleanup(maxAge time.Duration) int {
+	return m.store.Cleanup(maxAge)
+}
